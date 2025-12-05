@@ -1,0 +1,23 @@
+server:
+  port: 8080  # Cổng trong container, Railway sẽ route vào đây
+
+spring:
+  datasource:
+    # Sử dụng env do Railway cấp: PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD
+    url: jdbc:postgresql://${PGHOST}:${PGPORT}/${PGDATABASE}
+    username: ${PGUSER}
+    password: ${PGPASSWORD}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: none   # Vì cậu đang dùng Flyway, không cho JPA tự tạo bảng
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+spring:
+  flyway:
+    enabled: true
+    locations: classpath:db/migration

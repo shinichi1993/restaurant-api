@@ -1,0 +1,29 @@
+# ============================
+# CẤU HÌNH DÀNH CHO MÔI TRƯỜNG DEV
+# ============================
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/restaurant
+    username: postgres
+    password: root         # Có thể thay bằng ENV nếu muốn sạch hơn
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: none         # Không auto tạo bảng, dùng Flyway 100%
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+logging:
+  level:
+    root: INFO
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql: TRACE

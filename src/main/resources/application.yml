@@ -1,0 +1,20 @@
+# ============================
+# CẤU HÌNH CHUNG CHO TOÀN HỆ THỐNG
+# ============================
+
+spring:
+  application:
+    name: restaurant-api
+  config:
+    import: optional:file:.env
+
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}   # Mặc định chạy profile dev
+
+# JWT cấu hình chung (không hardcode secret)
+jwt:
+  secret: ${JWT_SECRET:default-secret}
+  expiration: 86400000   # 24h
+
+server:
+  port: 8080
