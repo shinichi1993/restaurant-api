@@ -105,7 +105,9 @@ public class SecurityConfig {
         CorsConfiguration config = new CorsConfiguration();
 
         // FE đang chạy ở http://localhost:5173
-        config.setAllowedOrigins(List.of("http://localhost:5173"));
+        config.setAllowedOrigins(List.of(
+                "https://restaurant-fe-production.up.railway.app",
+                "http://localhost:5173"));
 
         // Các method FE sẽ dùng
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
