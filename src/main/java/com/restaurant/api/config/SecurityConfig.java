@@ -5,6 +5,7 @@ import com.restaurant.api.security.filter.CustomAuthEntryPoint;
 import com.restaurant.api.security.filter.JwtAuthenticationFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.*;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.*;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
@@ -81,10 +82,16 @@ public class SecurityConfig {
 
                 // Phân quyền API
                 .authorizeHttpRequests(auth -> auth
+                        // Cho phép OPTIONS cho tất cả request → rất quan trọng
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
+                        // Cho phép auth API
                         .requestMatchers(
                                 "/api/auth/**",
                                 "/actuator/health"
                         ).permitAll()
+
+                        // Tất cả còn lại cần auth
                         .anyRequest().authenticated()
                 )
 
