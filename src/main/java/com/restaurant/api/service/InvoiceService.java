@@ -1,5 +1,6 @@
 package com.restaurant.api.service;
 
+import com.restaurant.api.dto.invoice.InvoiceExportData;
 import com.restaurant.api.dto.invoice.InvoiceItemResponse;
 import com.restaurant.api.dto.invoice.InvoiceResponse;
 import com.restaurant.api.entity.*;
@@ -47,6 +48,7 @@ public class InvoiceService {
     private final AuditLogService auditLogService;
     // Service đọc cấu hình hệ thống (Module 20 - System Settings)
     private final SystemSettingService systemSettingService;
+    private final SystemSettingRepository systemSettingRepository;
 
     // =====================================================================
     // 1. TẠO HÓA ĐƠN TỪ ORDER (được gọi từ PaymentService / PaymentController)
@@ -406,6 +408,161 @@ public class InvoiceService {
 
         // 5. Trả về Invoice để PaymentService có thể setInvoice(payment)
         return invoice;
+    }
+
+    /**
+     * buildInvoiceExportData
+     * =====================================================================
+     * Hàm chuẩn hoá dữ liệu HÓA ĐƠN để phục vụ EXPORT PDF (A5 / Thermal).
+     *
+     * Lưu ý quan trọng:
+     *  - Mọi exporter phải dùng chung object này, không được tự tính toán lại.
+     *  - Hàm này gom toàn bộ:
+     *       + thông tin cửa hàng (SystemSetting)
+     *       + thông tin hóa đơn
+     *       + danh sách món (snapshot ngay lúc thanh toán)
+     *       + toàn bộ phần TIỀN (discount, VAT, tổng cuối)
+     *
+     *  - Nhờ vậy: A5 / Thermal luôn đồng nhất 100%, không sai lệch.
+     *
+     * @param invoiceId ID hóa đơn cần export
+     * @return InvoiceExportData (dữ liệu chuẩn cho exporter)
+     * =====================================================================
+     */
+    @Transactional(readOnly = true)
+    public InvoiceExportData buildInvoiceExportData(Long invoiceId) {
+
+        // ============================================================
+        // 1. LOAD INVOICE
+        // ============================================================
+        Invoice invoice = invoiceRepository.findById(invoiceId)
+                .orElseThrow(() -> new RuntimeException("Không tìm thấy hóa đơn"));
+
+        // ============================================================
+        // 2. LOAD INVOICE ITEMS (snapshot tại thời điểm thanh toán)
+        // ============================================================
+        List<InvoiceItem> invoiceItems = invoiceItemRepository.findByInvoiceId(invoiceId);
+
+        if (invoiceItems.isEmpty()) {
+            throw new RuntimeException("Hóa đơn không có danh sách món (InvoiceItem rỗng)");
+        }
+
+        // Convert sang DTO Item trong InvoiceExportData
+        List<InvoiceExportData.Item> itemDTOs = invoiceItems.stream()
+                .map(ii -> InvoiceExportData.Item.builder()
+                        .dishName(ii.getDishName())
+                        .dishPrice(ii.getDishPrice())
+                        .quantity(ii.getQuantity())
+                        .subtotal(ii.getSubtotal())
+                        .build())
+                .toList();
+
+        // ============================================================
+        // 3. LẤY THÔNG TIN CỬA HÀNG (SystemSetting - group RESTAURANT)
+        // ============================================================
+        String restaurantName = getSetting("restaurant.name");
+        String restaurantAddress = getSetting("restaurant.address");
+        String restaurantPhone = getSetting("restaurant.phone");
+        String restaurantTaxId = getSetting("restaurant.tax_id");  // Thermal không hiển thị
+
+        // ============================================================
+        // 4. TÍNH TOÁN PHẦN TIỀN CHO EXPORT
+        // ============================================================
+
+        // 4.1 Tổng tiền món (sum subtotal)
+        BigDecimal totalBeforeDiscount = itemDTOs.stream()
+                .map(InvoiceExportData.Item::getSubtotal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // 4.2 Giảm giá (đã lưu trong invoice, đảm bảo không null)
+        BigDecimal discountAmount = invoice.getDiscountAmount() != null
+                ? invoice.getDiscountAmount()
+                : BigDecimal.ZERO;
+
+        if (discountAmount.compareTo(BigDecimal.ZERO) < 0) {
+            discountAmount = BigDecimal.ZERO;
+        }
+        if (discountAmount.compareTo(totalBeforeDiscount) > 0) {
+            discountAmount = totalBeforeDiscount;
+        }
+
+        // 4.3 Số tiền sau giảm, trước VAT
+        BigDecimal amountBeforeVat = totalBeforeDiscount.subtract(discountAmount);
+        if (amountBeforeVat.compareTo(BigDecimal.ZERO) < 0) {
+            amountBeforeVat = BigDecimal.ZERO;
+        }
+
+        // 4.4 VAT %
+        BigDecimal vatPercent = systemSettingService.getNumberSetting(
+                "vat.rate",
+                BigDecimal.ZERO
+        );
+
+        if (vatPercent.compareTo(BigDecimal.ZERO) < 0) vatPercent = BigDecimal.ZERO;
+        if (vatPercent.compareTo(new BigDecimal("100")) > 0) vatPercent = new BigDecimal("100");
+
+        // 4.5 VAT tiền = amountBeforeVat * (vat%/100)
+        BigDecimal vatAmount = BigDecimal.ZERO;
+
+        if (vatPercent.compareTo(BigDecimal.ZERO) > 0 &&
+                amountBeforeVat.compareTo(BigDecimal.ZERO) > 0) {
+
+            BigDecimal vatDecimal = vatPercent
+                    .divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP);
+
+            vatAmount = amountBeforeVat.multiply(vatDecimal)
+                    .setScale(0, RoundingMode.HALF_UP); // làm tròn về tiền Việt
+        }
+
+        // 4.6 Tổng cuối cùng
+        BigDecimal finalAmount = amountBeforeVat.add(vatAmount);
+
+        // ============================================================
+        // 5. GOM TOÀN BỘ THÀNH InvoiceExportData
+        // ============================================================
+        return InvoiceExportData.builder()
+                // ---------------- Thông tin cửa hàng ----------------
+                .restaurantName(restaurantName)
+                .restaurantAddress(restaurantAddress)
+                .restaurantPhone(restaurantPhone)
+                .restaurantTaxId(restaurantTaxId)
+
+                // ---------------- Thông tin hóa đơn ----------------
+                .invoiceId(invoice.getId())
+                .orderId(invoice.getOrderId())
+                .paidAt(invoice.getPaidAt())
+                .paymentMethod(invoice.getPaymentMethod())
+
+                // ---------------- Danh sách món --------------------
+                .items(itemDTOs)
+
+                // ---------------- Phần tiền ------------------------
+                .totalBeforeDiscount(totalBeforeDiscount)
+                .discountAmount(discountAmount)
+                .amountBeforeVat(amountBeforeVat)
+                .vatPercent(vatPercent)
+                .vatAmount(vatAmount)
+                .finalAmount(finalAmount)
+
+                // ---------------- Thông tin phụ --------------------
+                .voucherCode(invoice.getVoucherCode())
+                .loyaltyEarnedPoint(
+                        invoice.getLoyaltyEarnedPoint() != null
+                                ? invoice.getLoyaltyEarnedPoint()
+                                : 0
+                )
+
+                .build();
+    }
+
+    /**
+     * Hàm tiện ích đọc setting dạng STRING.
+     * Nếu không có → trả về chuỗi rỗng để tránh null khi render PDF.
+     */
+    private String getSetting(String key) {
+        return systemSettingRepository.findBySettingKey(key)
+                .map(SystemSetting::getSettingValue)
+                .orElse("");
     }
 
 }

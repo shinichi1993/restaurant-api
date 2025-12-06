@@ -188,5 +188,23 @@ public class SystemSettingService {
                 .orElse(defaultValue);
     }
 
+    /**
+     * Lấy cấu hình dạng chuỗi (STRING) theo key.
+     * ----------------------------------------------------
+     * - Dùng cho các setting kiểu text tự do, ví dụ:
+     *   + invoice.print_layout   → "A5" hoặc "THERMAL_80"
+     *   + restaurant.name        → tên nhà hàng
+     * - Nếu không tìm thấy cấu hình → trả về defaultValue
+     *
+     * @param key          khóa cấu hình (setting_key trong bảng system_setting)
+     * @param defaultValue giá trị mặc định nếu không tìm thấy
+     * @return giá trị setting dạng String
+     */
+    @Transactional(readOnly = true)
+    public String getStringSetting(String key, String defaultValue) {
+        return systemSettingRepository.findBySettingKey(key)
+                .map(SystemSetting::getSettingValue)
+                .orElse(defaultValue);
+    }
 
 }
