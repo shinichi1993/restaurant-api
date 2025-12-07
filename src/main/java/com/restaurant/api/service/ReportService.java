@@ -2,6 +2,14 @@ package com.restaurant.api.service;
 
 import com.restaurant.api.dto.report.*;
 import com.restaurant.api.entity.*;
+import com.restaurant.api.export.excel.IngredientUsageExcelExporter;
+import com.restaurant.api.export.excel.RevenueExcelExporter;
+import com.restaurant.api.export.excel.StockEntryExcelExporter;
+import com.restaurant.api.export.excel.TopDishExcelExporter;
+import com.restaurant.api.export.pdf.IngredientUsagePdfExporter;
+import com.restaurant.api.export.pdf.RevenuePdfExporter;
+import com.restaurant.api.export.pdf.StockEntryPdfExporter;
+import com.restaurant.api.export.pdf.TopDishPdfExporter;
 import com.restaurant.api.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.*;
@@ -58,6 +66,20 @@ public class ReportService {
     private final DishRepository dishRepository;
     private final StockEntryRepository stockEntryRepository;
     private final IngredientRepository ingredientRepository;
+    // ================== THÊM MỚI – EXPORTER DOANH THU ==================
+    /**
+     * Bean Excel Exporter cho báo cáo doanh thu.
+     * Dùng để tách phần format Excel ra khỏi Service nghiệp vụ.
+     */
+    private final RevenueExcelExporter revenueExcelExporter;
+    private final TopDishExcelExporter topDishExcelExporter;
+    private final IngredientUsageExcelExporter ingredientUsageExcelExporter;
+    private final StockEntryExcelExporter stockEntryExcelExporter;
+
+    private final RevenuePdfExporter revenuePdfExporter;
+    private final TopDishPdfExporter topDishPdfExporter;
+    private final IngredientUsagePdfExporter ingredientUsagePdfExporter;
+    private final StockEntryPdfExporter stockEntryPdfExporter;
 
     // ==================================================================
     // 1. BÁO CÁO DOANH THU THEO KHOẢNG NGÀY
@@ -361,85 +383,24 @@ public class ReportService {
     }
 
     // ==================================================================
-    // 5. EXPORT DOANH THU – EXCEL
+    // 5. EXPORT DOANH THU – EXCEL (DÙNG RevenueExcelExporter MỚI)
     // ==================================================================
 
     /**
      * Xuất báo cáo doanh thu ra file Excel (.xlsx)
-     * - Dùng lại dữ liệu từ getRevenueReport(...)
+     * ------------------------------------------------------------------
+     * - Lấy dữ liệu báo cáo bằng getRevenueReport(from, to)
+     * - Giao cho RevenueExcelExporter xử lý phần layout + style Excel
+     * - Giữ đúng Rule 26: xử lý số liệu BigDecimal ở BE, FE nhận file
      */
     @Transactional(readOnly = true)
     public byte[] exportRevenueToExcel(LocalDate from, LocalDate to) {
 
+        // 1. Lấy dữ liệu báo cáo doanh thu theo khoảng ngày
         RevenueReportResponse report = getRevenueReport(from, to);
 
-        try (Workbook wb = new XSSFWorkbook(); ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-
-            Sheet sheet = wb.createSheet("DoanhThu");
-
-            // Style header
-            CellStyle headerStyle = wb.createCellStyle();
-            org.apache.poi.ss.usermodel.Font headerFont = wb.createFont();
-            headerFont.setBold(true);
-            headerStyle.setFont(headerFont);
-
-            int row = 0;
-
-            // Tiêu đề
-            Row r1 = sheet.createRow(row++);
-            r1.createCell(0).setCellValue("BÁO CÁO DOANH THU");
-
-            // Khoảng thời gian
-            Row r2 = sheet.createRow(row++);
-            if (from != null && to != null) {
-                r2.createCell(0).setCellValue("Từ ngày " + from + " đến ngày " + to);
-            } else {
-                r2.createCell(0).setCellValue("Toàn bộ dữ liệu");
-            }
-
-            row++;
-
-            // Dòng tổng hợp
-            Row r3 = sheet.createRow(row++);
-            r3.createCell(0).setCellValue("Tổng doanh thu");
-            r3.createCell(1).setCellValue(report.getTotalRevenue().doubleValue());
-
-            Row r4 = sheet.createRow(row++);
-            r4.createCell(0).setCellValue("Tổng số đơn");
-            r4.createCell(1).setCellValue(report.getTotalOrders());
-
-            Row r5 = sheet.createRow(row++);
-            r5.createCell(0).setCellValue("Doanh thu TB/ngày");
-            r5.createCell(1).setCellValue(report.getAverageRevenuePerDay().doubleValue());
-
-            row++;
-
-            // Header bảng chi tiết
-            Row header = sheet.createRow(row++);
-            String[] cols = {"Ngày", "Doanh thu", "Số đơn"};
-            for (int i = 0; i < cols.length; i++) {
-                Cell c = header.createCell(i);
-                c.setCellValue(cols[i]);
-                c.setCellStyle(headerStyle);
-            }
-
-            // Dữ liệu chi tiết
-            for (RevenueByDayItem item : report.getItems()) {
-                Row r = sheet.createRow(row++);
-                r.createCell(0).setCellValue(item.getDate().toString());
-                r.createCell(1).setCellValue(item.getRevenue().doubleValue());
-                r.createCell(2).setCellValue(item.getOrderCount());
-            }
-
-            // Auto width
-            for (int i = 0; i < cols.length; i++) sheet.autoSizeColumn(i);
-
-            wb.write(baos);
-            return baos.toByteArray();
-
-        } catch (Exception e) {
-            throw new RuntimeException("Lỗi xuất Excel báo cáo doanh thu", e);
-        }
+        // 2. Giao cho ExcelExporter sinh file theo STYLE A
+        return revenueExcelExporter.export(report, from, to);
     }
 
     // ==================================================================
@@ -451,71 +412,8 @@ public class ReportService {
      */
     @Transactional(readOnly = true)
     public byte[] exportRevenueToPdf(LocalDate from, LocalDate to) {
-
         RevenueReportResponse report = getRevenueReport(from, to);
-
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-
-            Document doc = new Document(PageSize.A4, 36, 36, 36, 36);
-            PdfWriter.getInstance(doc, baos);
-            doc.open();
-
-            // ===================== FONT UNICODE ======================
-            String fontPath = "fonts/arial.ttf";
-            Font unicodeTitle = FontFactory.getFont(fontPath, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 14, Font.BOLD);
-            Font unicodeHeader = FontFactory.getFont(fontPath, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 10, Font.BOLD);
-            Font unicodeNormal = FontFactory.getFont(fontPath, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 10);
-
-            // ======================== HEADER =========================
-            Paragraph title = new Paragraph("BÁO CÁO DOANH THU", unicodeTitle);
-            title.setAlignment(Element.ALIGN_CENTER);
-            title.setSpacingAfter(10);
-            doc.add(title);
-
-            String range = (from != null && to != null)
-                    ? "Từ ngày " + from + " đến ngày " + to
-                    : "Toàn bộ dữ liệu";
-
-            Paragraph pRange = new Paragraph(range, unicodeNormal);
-            pRange.setAlignment(Element.ALIGN_CENTER);
-            pRange.setSpacingAfter(15);
-            doc.add(pRange);
-
-            doc.add(new Paragraph("Tổng doanh thu: " + formatMoney(report.getTotalRevenue()), unicodeNormal));
-            doc.add(new Paragraph("Tổng số đơn: " + report.getTotalOrders(), unicodeNormal));
-            doc.add(new Paragraph("Doanh thu TB/ngày: " + formatMoney(report.getAverageRevenuePerDay()), unicodeNormal));
-
-            // ======================== TABLE ==========================
-            PdfPTable table = new PdfPTable(3);
-            table.setWidthPercentage(100);
-            table.setWidths(new float[]{3, 3, 2});
-
-            addHeaderCell(table, "Ngày", unicodeHeader);
-            addHeaderCell(table, "Doanh thu", unicodeHeader);
-            addHeaderCell(table, "Số đơn", unicodeHeader);
-
-            for (RevenueByDayItem item : report.getItems()) {
-                addBodyCell(table, item.getDate().toString(), unicodeNormal);
-                addBodyCell(table, formatMoney(item.getRevenue()), unicodeNormal);
-                addBodyCell(table, String.valueOf(item.getOrderCount()), unicodeNormal);
-            }
-
-            doc.add(table);
-
-            Paragraph footer = new Paragraph(
-                    "Ngày in: " + LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
-                    unicodeNormal
-            );
-            footer.setAlignment(Element.ALIGN_RIGHT);
-            footer.setSpacingBefore(15);
-            doc.add(footer);
-
-            doc.close();
-            return baos.toByteArray();
-
-        } catch (Exception e) {
-            throw new RuntimeException("Lỗi xuất PDF báo cáo doanh thu", e);
-        }
+        return revenuePdfExporter.export(report, from, to);
     }
 
     // ==================================================================
@@ -531,53 +429,9 @@ public class ReportService {
 
         List<TopDishReportItem> items = getTopDishes(from, to, limit);
 
-        try (Workbook wb = new XSSFWorkbook(); ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-
-            Sheet sheet = wb.createSheet("TopDish");
-
-            CellStyle headerStyle = wb.createCellStyle();
-            org.apache.poi.ss.usermodel.Font headerFont = wb.createFont();
-            headerFont.setBold(true);
-            headerStyle.setFont(headerFont);
-
-            int row = 0;
-
-            Row r1 = sheet.createRow(row++);
-            r1.createCell(0).setCellValue("BÁO CÁO TOP MÓN BÁN CHẠY");
-
-            Row r2 = sheet.createRow(row++);
-            if (from != null && to != null) {
-                r2.createCell(0).setCellValue("Từ ngày " + from + " đến ngày " + to);
-            } else {
-                r2.createCell(0).setCellValue("Toàn bộ dữ liệu");
-            }
-
-            row++;
-
-            Row header = sheet.createRow(row++);
-            String[] cols = {"Món ăn", "Số lượng", "Doanh thu"};
-            for (int i = 0; i < cols.length; i++) {
-                Cell c = header.createCell(i);
-                c.setCellValue(cols[i]);
-                c.setCellStyle(headerStyle);
-            }
-
-            for (TopDishReportItem item : items) {
-                Row r = sheet.createRow(row++);
-                r.createCell(0).setCellValue(item.getDishName());
-                r.createCell(1).setCellValue(item.getTotalQuantity());
-                r.createCell(2).setCellValue(item.getTotalRevenue().doubleValue());
-            }
-
-            for (int i = 0; i < cols.length; i++) sheet.autoSizeColumn(i);
-
-            wb.write(baos);
-            return baos.toByteArray();
-
-        } catch (Exception e) {
-            throw new RuntimeException("Lỗi xuất Excel báo cáo top món", e);
-        }
+        return topDishExcelExporter.export(items, from, to);
     }
+
 
     // ==================================================================
     // 8. EXPORT TOP DISH – PDF
@@ -590,53 +444,8 @@ public class ReportService {
     public byte[] exportTopDishesToPdf(LocalDate from, LocalDate to, int limit) {
 
         List<TopDishReportItem> items = getTopDishes(from, to, limit);
-
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-
-            Document doc = new Document(PageSize.A4, 36, 36, 36, 36);
-            PdfWriter.getInstance(doc, baos);
-            doc.open();
-
-            // ===================== FONT UNICODE ======================
-            String fontPath = "fonts/arial.ttf";
-            Font titleFont = FontFactory.getFont(fontPath, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 14, Font.BOLD);
-            Font headerFont = FontFactory.getFont(fontPath, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 10, Font.BOLD);
-            Font normalFont = FontFactory.getFont(fontPath, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 10);
-
-            Paragraph title = new Paragraph("BÁO CÁO TOP MÓN BÁN CHẠY", titleFont);
-            title.setAlignment(Element.ALIGN_CENTER);
-            title.setSpacingAfter(10);
-            doc.add(title);
-
-            String range = (from != null && to != null)
-                    ? "Từ ngày " + from + " đến ngày " + to
-                    : "Toàn bộ dữ liệu";
-            Paragraph pRange = new Paragraph(range, normalFont);
-            pRange.setAlignment(Element.ALIGN_CENTER);
-            pRange.setSpacingAfter(15);
-            doc.add(pRange);
-
-            PdfPTable table = new PdfPTable(3);
-            table.setWidthPercentage(100);
-            table.setWidths(new float[]{5, 2, 3});
-
-            addHeaderCell(table, "Món ăn", headerFont);
-            addHeaderCell(table, "Số lượng", headerFont);
-            addHeaderCell(table, "Doanh thu", headerFont);
-
-            for (TopDishReportItem item : items) {
-                addBodyCell(table, item.getDishName(), normalFont);
-                addBodyCell(table, String.valueOf(item.getTotalQuantity()), normalFont);
-                addBodyCell(table, formatMoney(item.getTotalRevenue()), normalFont);
-            }
-
-            doc.add(table);
-            doc.close();
-            return baos.toByteArray();
-
-        } catch (Exception e) {
-            throw new RuntimeException("Lỗi xuất PDF báo cáo top món", e);
-        }
+        // nếu TopDishPdfExporter của bạn đang có thêm tham số limit thì gọi export(items, from, to, limit);
+        return topDishPdfExporter.export(items, from, to);
     }
 
     // ==================================================================
@@ -648,55 +457,8 @@ public class ReportService {
      */
     @Transactional(readOnly = true)
     public byte[] exportIngredientUsageToExcel(LocalDate from, LocalDate to) {
-
         List<IngredientUsageReportItem> items = getIngredientUsageReport(from, to);
-
-        try (Workbook wb = new XSSFWorkbook(); ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-
-            Sheet sheet = wb.createSheet("IngredientUsage");
-
-            CellStyle headerStyle = wb.createCellStyle();
-            org.apache.poi.ss.usermodel.Font headerFont = wb.createFont();
-            headerFont.setBold(true);
-            headerStyle.setFont(headerFont);
-
-            int row = 0;
-
-            Row r1 = sheet.createRow(row++);
-            r1.createCell(0).setCellValue("BÁO CÁO NGUYÊN LIỆU TIÊU HAO");
-
-            Row r2 = sheet.createRow(row++);
-            if (from != null && to != null) {
-                r2.createCell(0).setCellValue("Từ ngày " + from + " đến ngày " + to);
-            } else {
-                r2.createCell(0).setCellValue("Toàn bộ dữ liệu");
-            }
-
-            row++;
-
-            Row header = sheet.createRow(row++);
-            String[] cols = {"Nguyên liệu", "Số lượng dùng", "Đơn vị"};
-            for (int i = 0; i < cols.length; i++) {
-                Cell c = header.createCell(i);
-                c.setCellValue(cols[i]);
-                c.setCellStyle(headerStyle);
-            }
-
-            for (IngredientUsageReportItem item : items) {
-                Row r = sheet.createRow(row++);
-                r.createCell(0).setCellValue(item.getIngredientName());
-                r.createCell(1).setCellValue(item.getTotalUsed().doubleValue());
-                r.createCell(2).setCellValue(item.getUnit());
-            }
-
-            for (int i = 0; i < cols.length; i++) sheet.autoSizeColumn(i);
-
-            wb.write(baos);
-            return baos.toByteArray();
-
-        } catch (Exception e) {
-            throw new RuntimeException("Lỗi xuất Excel báo cáo nguyên liệu tiêu hao", e);
-        }
+        return ingredientUsageExcelExporter.export(items, from, to);
     }
 
     // ==================================================================
@@ -710,53 +472,7 @@ public class ReportService {
     public byte[] exportIngredientUsageToPdf(LocalDate from, LocalDate to) {
 
         List<IngredientUsageReportItem> items = getIngredientUsageReport(from, to);
-
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-
-            Document doc = new Document(PageSize.A4, 36, 36, 36, 36);
-            PdfWriter.getInstance(doc, baos);
-            doc.open();
-
-            // ===================== FONT UNICODE ======================
-            String fontPath = "fonts/arial.ttf";
-            Font titleFont = FontFactory.getFont(fontPath, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 14, Font.BOLD);
-            Font headerFont = FontFactory.getFont(fontPath, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 10, Font.BOLD);
-            Font normalFont = FontFactory.getFont(fontPath, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 10);
-
-            Paragraph title = new Paragraph("BÁO CÁO NGUYÊN LIỆU TIÊU HAO", titleFont);
-            title.setAlignment(Element.ALIGN_CENTER);
-            title.setSpacingAfter(10);
-            doc.add(title);
-
-            String range = (from != null && to != null)
-                    ? "Từ ngày " + from + " đến ngày " + to
-                    : "Toàn bộ dữ liệu";
-            Paragraph rangeP = new Paragraph(range, normalFont);
-            rangeP.setAlignment(Element.ALIGN_CENTER);
-            rangeP.setSpacingAfter(15);
-            doc.add(rangeP);
-
-            PdfPTable table = new PdfPTable(3);
-            table.setWidthPercentage(100);
-            table.setWidths(new float[]{5, 3, 2});
-
-            addHeaderCell(table, "Nguyên liệu", headerFont);
-            addHeaderCell(table, "Số lượng dùng", headerFont);
-            addHeaderCell(table, "Đơn vị", headerFont);
-
-            for (IngredientUsageReportItem item : items) {
-                addBodyCell(table, item.getIngredientName(), normalFont);
-                addBodyCell(table, item.getTotalUsed().toPlainString(), normalFont);
-                addBodyCell(table, item.getUnit(), normalFont);
-            }
-
-            doc.add(table);
-            doc.close();
-            return baos.toByteArray();
-
-        } catch (Exception e) {
-            throw new RuntimeException("Lỗi xuất PDF báo cáo nguyên liệu tiêu hao", e);
-        }
+        return ingredientUsagePdfExporter.export(items, from, to);
     }
 
     // ==================================================================
@@ -769,55 +485,8 @@ public class ReportService {
      */
     @Transactional(readOnly = true)
     public byte[] exportStockEntryToExcel(LocalDate from, LocalDate to) {
-
         List<StockEntryReportItem> items = getStockEntryReport(from, to);
-
-        try (Workbook wb = new XSSFWorkbook(); ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-
-            Sheet sheet = wb.createSheet("NhapKhoNguyenLieu");
-
-            CellStyle headerStyle = wb.createCellStyle();
-            org.apache.poi.ss.usermodel.Font headerFont = wb.createFont();
-            headerFont.setBold(true);
-            headerStyle.setFont(headerFont);
-
-            int row = 0;
-
-            Row r1 = sheet.createRow(row++);
-            r1.createCell(0).setCellValue("BÁO CÁO NHẬP KHO NGUYÊN LIỆU");
-
-            Row r2 = sheet.createRow(row++);
-            if (from != null && to != null) {
-                r2.createCell(0).setCellValue("Từ ngày " + from + " đến ngày " + to);
-            } else {
-                r2.createCell(0).setCellValue("Toàn bộ dữ liệu");
-            }
-
-            row++;
-
-            Row header = sheet.createRow(row++);
-            String[] cols = {"Nguyên liệu", "Tổng lượng nhập", "Đơn vị"};
-            for (int i = 0; i < cols.length; i++) {
-                Cell c = header.createCell(i);
-                c.setCellValue(cols[i]);
-                c.setCellStyle(headerStyle);
-            }
-
-            for (StockEntryReportItem item : items) {
-                Row r = sheet.createRow(row++);
-                r.createCell(0).setCellValue(item.getIngredientName());
-                r.createCell(1).setCellValue(item.getTotalImportedAmount().doubleValue());
-                r.createCell(2).setCellValue(item.getUnit());
-            }
-
-            for (int i = 0; i < cols.length; i++) sheet.autoSizeColumn(i);
-
-            wb.write(baos);
-            return baos.toByteArray();
-
-        } catch (Exception e) {
-            throw new RuntimeException("Lỗi xuất Excel báo cáo nhập kho nguyên liệu", e);
-        }
+        return stockEntryExcelExporter.export(items, from, to);
     }
 
     /**
@@ -827,63 +496,7 @@ public class ReportService {
     public byte[] exportStockEntryToPdf(LocalDate from, LocalDate to) {
 
         List<StockEntryReportItem> items = getStockEntryReport(from, to);
-
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-
-            Document doc = new Document(PageSize.A4, 36, 36, 36, 36);
-            PdfWriter.getInstance(doc, baos);
-            doc.open();
-
-            // ===================== FONT UNICODE ======================
-            String fontPath = "fonts/arial.ttf";
-            Font titleFont = FontFactory.getFont(fontPath, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 14, Font.BOLD);
-            Font headerFont = FontFactory.getFont(fontPath, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 10, Font.BOLD);
-            Font normalFont = FontFactory.getFont(fontPath, BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 10);
-
-            Paragraph p1 = new Paragraph("BÁO CÁO NHẬP KHO NGUYÊN LIỆU", titleFont);
-            p1.setAlignment(Element.ALIGN_CENTER);
-            p1.setSpacingAfter(10);
-            doc.add(p1);
-
-            String range = (from != null && to != null)
-                    ? "Từ ngày " + from + " đến ngày " + to
-                    : "Toàn bộ dữ liệu";
-
-            Paragraph p2 = new Paragraph(range, normalFont);
-            p2.setAlignment(Element.ALIGN_CENTER);
-            p2.setSpacingAfter(15);
-            doc.add(p2);
-
-            PdfPTable table = new PdfPTable(3);
-            table.setWidthPercentage(100);
-            table.setWidths(new float[]{5, 3, 2});
-
-            addHeaderCell(table, "Nguyên liệu", headerFont);
-            addHeaderCell(table, "Tổng lượng nhập", headerFont);
-            addHeaderCell(table, "Đơn vị", headerFont);
-
-            for (StockEntryReportItem item : items) {
-                addBodyCell(table, item.getIngredientName(), normalFont);
-                addBodyCell(table, item.getTotalImportedAmount().toPlainString(), normalFont);
-                addBodyCell(table, item.getUnit(), normalFont);
-            }
-
-            doc.add(table);
-
-            Paragraph footer = new Paragraph(
-                    "Ngày in: " + LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
-                    normalFont
-            );
-            footer.setAlignment(Element.ALIGN_RIGHT);
-            footer.setSpacingBefore(15);
-            doc.add(footer);
-
-            doc.close();
-            return baos.toByteArray();
-
-        } catch (Exception e) {
-            throw new RuntimeException("Lỗi xuất PDF báo cáo nhập kho nguyên liệu", e);
-        }
+        return stockEntryPdfExporter.export(items, from, to);
     }
 
     // ==================================================================
