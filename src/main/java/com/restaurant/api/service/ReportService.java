@@ -208,7 +208,7 @@ public class ReportService {
 
         // Lấy toàn bộ OrderItem thuộc các order đó
         List<OrderItem> relatedItems = orderItemRepository.findAll().stream()
-                .filter(i -> orderIds.contains(i.getOrderId()))
+                .filter(i -> i.getOrder() != null && orderIds.contains(i.getOrder().getId()))
                 .toList();
 
         if (relatedItems.isEmpty()) return Collections.emptyList();
@@ -216,7 +216,7 @@ public class ReportService {
         // Gom nhóm theo dishId → tổng số lượng
         Map<Long, Long> qtyByDish = relatedItems.stream()
                 .collect(Collectors.groupingBy(
-                        OrderItem::getDishId,
+                        i -> i.getDish().getId(),
                         Collectors.summingLong(OrderItem::getQuantity)
                 ));
 

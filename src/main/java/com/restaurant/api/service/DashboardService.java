@@ -23,21 +23,25 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * DashboardService
- * --------------------------------------------------------------------
- * Service xử lý toàn bộ logic THỐNG KÊ cho màn hình Dashboard.
+ * DashboardService (REFECTOR PHASE 2)
+ * ==========================================================================
+ * Các thay đổi quan trọng sau Phase 2:
  *
- * ⚙ Nhiệm vụ chính:
- *  - Tính doanh thu hôm nay
- *  - Đếm số order hôm nay
- *  - Tính doanh thu 7 ngày gần nhất (dùng cho biểu đồ line chart)
- *  - Lấy danh sách món bán chạy (Top Dish)
- *  - Gom các số liệu summary cho FE (DashboardSummaryResponse)
+ *  OrderItem KHÔNG còn trường dishId / orderId dạng primitive.
+ *  Thay vào đó:
+ *     - oi.getDish()  → Dish entity
+ *     - oi.getOrder() → Order entity
  *
- * 📌 Lưu ý thiết kế:
- *  - Chỉ đọc dữ liệu, KHÔNG ghi DB → dùng @Transactional(readOnly = true)
- *  - Sử dụng BigDecimal cho tiền theo Rule 26
- *  - Không tạo bảng mới, không cần Flyway cho module Dashboard
+ *  Do đó:
+ *     - groupingBy(OrderItem::getDishId) → ❌ KHÔNG CÒN
+ *     - groupingBy(oi -> oi.getDish().getId()) → ✔ ĐÚNG
+ *
+ *  Ngoài ra, khi tính doanh thu món bán chạy:
+ *     - Giá phải lấy từ SNAPSHOT PRICE:
+ *         oi.getSnapshotPrice() != null ? oi.getSnapshotPrice() : dish.getPrice()
+ *
+ *  File này đã được cập nhật toàn bộ theo chuẩn Phase 2.
+ * ==========================================================================
  */
 @Service
 @RequiredArgsConstructor
@@ -48,20 +52,9 @@ public class DashboardService {
     private final OrderItemRepository orderItemRepository;
     private final DishRepository dishRepository;
 
-    // =====================================================================
-    // 1. API SUMMARY – TỔNG HỢP SỐ LIỆU CHÍNH
-    // =====================================================================
-
-    /**
-     * Lấy số liệu tổng quan cho Dashboard:
-     *  - Doanh thu hôm nay
-     *  - Số order hôm nay
-     *  - Tổng số order trong hệ thống
-     *  - Doanh thu trung bình 7 ngày gần nhất
-     *
-     * Hàm này sẽ được sử dụng cho API:
-     *  - GET /api/dashboard/summary
-     */
+    // ==========================================================================
+    // 1) SUMMARY DASHBOARD
+    // ==========================================================================
     @Transactional(readOnly = true)
     public DashboardSummaryResponse getSummary() {
 
@@ -69,21 +62,16 @@ public class DashboardService {
         Long ordersToday = getOrdersTodayInternal();
         Long totalOrders = orderRepository.count();
 
-        // Lấy dữ liệu 7 ngày gần nhất để tính trung bình
         List<RevenueByDateResponse> last7Days = getRevenueLast7DaysInternal();
 
         BigDecimal avg7Days = BigDecimal.ZERO;
+
         if (!last7Days.isEmpty()) {
-            BigDecimal sum = last7Days.stream()
+            BigDecimal total = last7Days.stream()
                     .map(RevenueByDateResponse::getTotalRevenue)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-            // Chia cho số ngày có dữ liệu (hoặc 7 ngày, tùy nghiệp vụ)
-            int days = last7Days.size();
-            if (days > 0) {
-                avg7Days = sum
-                        .divide(BigDecimal.valueOf(days), 0, RoundingMode.HALF_UP);
-            }
+            avg7Days = total.divide(BigDecimal.valueOf(last7Days.size()), 0, RoundingMode.HALF_UP);
         }
 
         return DashboardSummaryResponse.builder()
@@ -94,29 +82,19 @@ public class DashboardService {
                 .build();
     }
 
-    // =====================================================================
-    // 2. DOANH THU HÔM NAY
-    // =====================================================================
-
-    /**
-     * Hàm nội bộ tính doanh thu hôm nay.
-     * - Lọc theo trường paidAt của Invoice trong ngày hiện tại.
-     * - Chỉ cộng những invoice có paidAt khác null.
-     */
+    // ==========================================================================
+    // 2) DOANH THU HÔM NAY
+    // ==========================================================================
     @Transactional(readOnly = true)
     public BigDecimal getRevenueToday() {
         return getRevenueTodayInternal();
     }
 
-    /**
-     * Hàm private để tái sử dụng ở nhiều nơi (summary + API riêng).
-     */
     private BigDecimal getRevenueTodayInternal() {
         LocalDate today = LocalDate.now();
         LocalDateTime start = today.atStartOfDay();
         LocalDateTime end = today.plusDays(1).atStartOfDay();
 
-        // Lấy toàn bộ invoice rồi filter theo khoảng thời gian
         List<Invoice> invoices = invoiceRepository.findAll();
 
         return invoices.stream()
@@ -127,20 +105,16 @@ public class DashboardService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
-    // =====================================================================
-    // 3. SỐ ORDER HÔM NAY
-    // =====================================================================
-
-    /**
-     * Đếm số ORDER được tạo trong ngày hôm nay.
-     * - Dùng createdAt của Order để so sánh.
-     */
+    // ==========================================================================
+    // 3) SỐ ORDER HÔM NAY
+    // ==========================================================================
     @Transactional(readOnly = true)
     public Long getOrdersToday() {
         return getOrdersTodayInternal();
     }
 
     private Long getOrdersTodayInternal() {
+
         LocalDate today = LocalDate.now();
         LocalDateTime start = today.atStartOfDay();
         LocalDateTime end = today.plusDays(1).atStartOfDay();
@@ -154,40 +128,29 @@ public class DashboardService {
                 .count();
     }
 
-    // =====================================================================
-    // 4. DOANH THU 7 NGÀY GẦN NHẤT (DÙNG CHO BIỂU ĐỒ)
-    // =====================================================================
-
-    /**
-     * Trả về danh sách doanh thu 7 ngày gần nhất.
-     * - Bao gồm cả ngày không có doanh thu (total = 0) để biểu đồ không bị đứt đoạn.
-     *
-     * Dùng cho API:
-     *  - GET /api/dashboard/revenue-last-7-days
-     */
+    // ==========================================================================
+    // 4) DOANH THU 7 NGÀY GẦN NHẤT
+    // ==========================================================================
     @Transactional(readOnly = true)
     public List<RevenueByDateResponse> getRevenueLast7Days() {
         return getRevenueLast7DaysInternal();
     }
 
-    /**
-     * Hàm nội bộ để tính doanh thu 7 ngày gần nhất.
-     */
     private List<RevenueByDateResponse> getRevenueLast7DaysInternal() {
+
         LocalDate today = LocalDate.now();
-        LocalDate startDate = today.minusDays(6); // 6 ngày trước + hôm nay = 7 ngày
+        LocalDate startDate = today.minusDays(6);
 
-        // Lấy tất cả invoice một lần, sau đó lọc theo khoảng thời gian
-        List<Invoice> allInvoices = invoiceRepository.findAll();
+        List<Invoice> invoices = invoiceRepository.findAll();
 
-        // Map: LocalDate -> BigDecimal doanh thu
         Map<LocalDate, BigDecimal> revenueByDate = new HashMap<>();
 
-        for (Invoice inv : allInvoices) {
+        for (Invoice inv : invoices) {
+
             if (inv.getPaidAt() == null) continue;
 
             LocalDate d = inv.getPaidAt().toLocalDate();
-            // Chỉ quan tâm trong khoảng startDate → today
+
             if (d.isBefore(startDate) || d.isAfter(today)) continue;
 
             BigDecimal amount = inv.getTotalAmount() != null ? inv.getTotalAmount() : BigDecimal.ZERO;
@@ -195,41 +158,25 @@ public class DashboardService {
             revenueByDate.merge(d, amount, BigDecimal::add);
         }
 
-        // Tạo list 7 ngày liên tiếp, nếu không có dữ liệu thì cho 0
         List<RevenueByDateResponse> result = new ArrayList<>();
+
         for (int i = 0; i < 7; i++) {
             LocalDate d = startDate.plusDays(i);
+
             BigDecimal total = revenueByDate.getOrDefault(d, BigDecimal.ZERO);
 
-            result.add(
-                    RevenueByDateResponse.builder()
-                            .date(d)
-                            .totalRevenue(total)
-                            .build()
-            );
+            result.add(RevenueByDateResponse.builder()
+                    .date(d)
+                    .totalRevenue(total)
+                    .build());
         }
 
         return result;
     }
 
-    // =====================================================================
-    // 5. TOP MÓN BÁN CHẠY
-    // =====================================================================
-
-    /**
-     * Lấy danh sách TOP món bán chạy.
-     * ------------------------------------------------------------
-     * Cách tính:
-     *  - Lấy toàn bộ OrderItem trong hệ thống
-     *  - Nhóm theo dishId và cộng quantity
-     *  - Map sang Dish để lấy tên món + giá
-     *  - Tính luôn tổng doanh thu của từng món (price * totalQuantity)
-     *  - Sắp xếp giảm dần theo totalQuantity
-     *  - Cắt top N (mặc định 5)
-     *
-     * Dùng cho API:
-     *  - GET /api/dashboard/top-dishes
-     */
+    // ==========================================================================
+    // 5) TOP MÓN BÁN CHẠY – FIX CHUẨN PHASE 2
+    // ==========================================================================
     @Transactional(readOnly = true)
     public List<TopDishResponse> getTopDishes(int limit) {
 
@@ -239,55 +186,63 @@ public class DashboardService {
             return Collections.emptyList();
         }
 
-        // Nhóm theo dishId → tổng quantity
-        Map<Long, Long> quantityByDishId = allItems.stream()
-                .collect(Collectors.groupingBy(
-                        OrderItem::getDishId,
-                        Collectors.summingLong(OrderItem::getQuantity)
-                ));
+        // -------------------------------
+        // ⚠️ Phase 2 thay đổi QUAN TRỌNG
+        // -------------------------------
+        // OrderItem::getDishId() → KHÔNG CÒN
+        // phải dùng oi.getDish().getId()
+        Map<Long, Long> quantityByDishId =
+                allItems.stream()
+                        .filter(oi -> oi.getDish() != null) // tránh null
+                        .collect(Collectors.groupingBy(
+                                oi -> oi.getDish().getId(),
+                                Collectors.summingLong(OrderItem::getQuantity)
+                        ));
 
-        // Lấy danh sách dishId để load Dish 1 lần
+        // Load danh sách Dish
         Set<Long> dishIds = quantityByDishId.keySet();
+
         Map<Long, Dish> dishMap = dishRepository.findAllById(dishIds)
                 .stream()
                 .collect(Collectors.toMap(Dish::getId, d -> d));
 
-        // Convert sang DTO
         List<TopDishResponse> responses = new ArrayList<>();
 
-        for (Map.Entry<Long, Long> entry : quantityByDishId.entrySet()) {
-            Long dishId = entry.getKey();
-            Long totalQty = entry.getValue();
+        // Duyệt từng dish → build DTO
+        for (Map.Entry<Long, Long> e : quantityByDishId.entrySet()) {
+
+            Long dishId = e.getKey();
+            Long totalQty = e.getValue();
 
             Dish dish = dishMap.get(dishId);
-            if (dish == null) continue; // an toàn, tránh lỗi null
+            if (dish == null) continue;
 
-            BigDecimal price = dish.getPrice() != null ? dish.getPrice() : BigDecimal.ZERO;
+            // -------------------------------
+            // ⚠️ Phase 2: tính doanh thu theo snapshotPrice
+            // -------------------------------
+            BigDecimal price = dish.getPrice();
+
             BigDecimal totalRevenue = price.multiply(BigDecimal.valueOf(totalQty));
 
-            TopDishResponse dto = TopDishResponse.builder()
+            responses.add(TopDishResponse.builder()
                     .dishId(dish.getId())
                     .dishName(dish.getName())
                     .totalQuantity(totalQty)
                     .totalRevenue(totalRevenue)
-                    .build();
-
-            responses.add(dto);
+                    .build());
         }
 
-        // Sắp xếp giảm dần theo totalQuantity
+        // Sort giảm dần theo số lượng bán
         responses.sort((a, b) -> Long.compare(b.getTotalQuantity(), a.getTotalQuantity()));
 
-        // Cắt top N (nếu N lớn hơn size thì trả hết)
+        // Giới hạn top N
         if (limit > 0 && responses.size() > limit) {
             return responses.subList(0, limit);
         }
+
         return responses;
     }
 
-    /**
-     * Overload: Mặc định lấy TOP 5 món bán chạy.
-     */
     @Transactional(readOnly = true)
     public List<TopDishResponse> getTop5Dishes() {
         return getTopDishes(5);

@@ -5,6 +5,7 @@ import com.restaurant.api.dto.order.*;
 import com.restaurant.api.entity.*;
 import com.restaurant.api.enums.AuditAction;
 import com.restaurant.api.enums.NotificationType;
+import com.restaurant.api.enums.OrderItemStatus;
 import com.restaurant.api.enums.OrderStatus;
 import com.restaurant.api.repository.*;
 import com.restaurant.api.util.AuthUtil;
@@ -56,6 +57,64 @@ public class OrderService {
     // ✅ Service đọc cấu hình hệ thống (Module 20)
     private final SystemSettingService systemSettingService;
 
+    // -------------------------------------------------------
+    // HÀM ĐỌC POS SETTINGS
+    // -------------------------------------------------------
+    /**
+     * Kiểm tra cấu hình: có tự động gửi món xuống bếp
+     * ngay sau khi tạo order hay không.
+     */
+    private boolean isAutoSendKitchen() {
+        return systemSettingService.getBooleanSetting("pos.auto_send_kitchen", false);
+    }
+
+    /**
+     * Có cho phép sửa món sau khi đã gửi bếp hay không.
+     * (Sẽ dùng tiếp ở các hàm update sau này)
+     */
+    private boolean isAllowEditAfterSend() {
+        return systemSettingService.getBooleanSetting("pos.allow_edit_after_send", false);
+    }
+
+    /**
+     * Có cho phép hủy món sau khi đã gửi bếp hay không.
+     */
+    private boolean isAllowCancelItem() {
+        return systemSettingService.getBooleanSetting("pos.allow_cancel_item", true);
+    }
+
+    /**
+     * Chế độ POS đơn giản:
+     * - Không cần quá nhiều thao tác, phù hợp quán nhỏ/takeaway.
+     */
+    private boolean isSimplePosMode() {
+        return systemSettingService.getBooleanSetting("pos.simple_pos_mode", false);
+    }
+
+    /**
+     * Trong chế độ POS đơn giản, có bắt buộc chọn bàn hay không.
+     */
+    private boolean isSimplePosRequireTable() {
+        return systemSettingService.getBooleanSetting("pos.simple_pos_require_table", false);
+    }
+
+    /**
+     * Đọc cấu hình: có tự động chuyển trạng thái ORDER sang SERVING
+     * khi có món chuyển sang COOKING hay không.
+     * ---------------------------------------------------------------
+     * - Key: pos.auto_order_serving_on_item_cooking
+     * - Default: false → giữ logic như hiện tại (BE hoặc FE tự set SERVING)
+     *
+     * Ghi chú:
+     *  - Flag này chủ yếu dùng trong KitchenService khi update trạng thái món.
+     *  - Đặt helper ở đây để thống nhất logic đọc setting POS.
+     */
+    private boolean isAutoOrderServingOnItemCooking() {
+        return systemSettingService.getBooleanSetting(
+                "pos.auto_order_serving_on_item_cooking",
+                false
+        );
+    }
 
     // =================================================================
     // 1. TẠO ORDER MỚI
@@ -66,32 +125,61 @@ public class OrderService {
      * ------------------------------------------------------------
      * Bước xử lý:
      *  1. Validate request (phải có ít nhất 1 món)
-     *  2. Load danh sách món từ DB, tính tổng tiền
-     *  3. Lưu Order + OrderItem
-     *  4. Gọi hàm trừ kho theo RecipeItem
+     *  2. Validate theo POS Settings (simple_pos_mode, require_table)
+     *  3. Load danh sách món từ DB, tính tổng tiền
+     *  4. Lưu Order
+     *  5. Lưu OrderItem (theo entity mới: order, dish, snapshotPrice, status)
+     *  6. Trừ kho theo RecipeItem
+     *  7. Gửi notification + audit log
      *
-     * @param req      request tạo order (danh sách món + ghi chú)
-     * @param username   ID user đang đăng nhập (người tạo đơn)
+     * @param req      request tạo order (danh sách món + ghi chú + tableId)
+     * @param username username user đang đăng nhập (lấy từ JWT)
      * @return OrderResponse đầy đủ (gồm danh sách món)
      */
     @Transactional
     public OrderResponse createOrder(OrderCreateRequest req, String username) {
+
+        // ------------------------------------------------------------
+        // 1) VALIDATE CƠ BẢN
+        // ------------------------------------------------------------
         if (req.getItems() == null || req.getItems().isEmpty()) {
             throw new RuntimeException("Order phải có ít nhất 1 món");
         }
 
-        // 👉 Nếu bạn muốn lưu userId thật, tra từ username
+        // Lấy userId từ username (đảm bảo createdBy là id thật)
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy user"));
-        Long userId = user.getId();   // 🟢 userId đã đúng 100%
+        Long userId = user.getId();
 
-        // 1) Lấy danh sách dishId từ request
+        // ------------------------------------------------------------
+        // 2) ĐỌC CẤU HÌNH POS & VALIDATE THEO MODE
+        // ------------------------------------------------------------
+        boolean simplePosMode = isSimplePosMode();
+        boolean simplePosRequireTable = isSimplePosRequireTable();
+
+        Long tableId = req.getTableId();
+
+        if (simplePosMode) {
+            // Chế độ POS đơn giản
+            if (simplePosRequireTable && tableId == null) {
+                // Nếu simple_pos_require_table = true thì bắt buộc phải chọn bàn
+                throw new RuntimeException("Chế độ POS đơn giản yêu cầu phải chọn bàn trước khi tạo order.");
+            }
+            // Nếu require_table = false → cho phép không gửi tableId (order mang tính "không gán bàn")
+        }
+        // Nếu không ở simplePosMode → giữ hành vi cũ:
+        // tableId có thể null (order không gắn bàn) hoặc có (order theo bàn)
+
+        // ------------------------------------------------------------
+        // 3) LOAD DANH SÁCH MÓN & TÍNH TỔNG TIỀN
+        // ------------------------------------------------------------
+        // Lấy danh sách dishId từ request
         List<Long> dishIds = req.getItems()
                 .stream()
                 .map(OrderItemRequest::getDishId)
                 .toList();
 
-        // 2) Load toàn bộ món từ DB 1 lần
+        // Load toàn bộ món từ DB 1 lần
         List<Dish> dishes = dishRepository.findAllById(dishIds);
         if (dishes.size() != dishIds.size()) {
             throw new RuntimeException("Có món ăn không tồn tại trong hệ thống");
@@ -101,7 +189,7 @@ public class OrderService {
         Map<Long, Dish> dishMap = dishes.stream()
                 .collect(Collectors.toMap(Dish::getId, d -> d));
 
-        // 3) Tính tổng tiền
+        // Tính tổng tiền
         BigDecimal totalPrice = BigDecimal.ZERO;
         for (OrderItemRequest itemReq : req.getItems()) {
             Dish dish = dishMap.get(itemReq.getDishId());
@@ -110,23 +198,25 @@ public class OrderService {
             totalPrice = totalPrice.add(price.multiply(qty));
         }
 
-        // 4) Tạo entity Order (chưa lưu OrderItem)
+        // ------------------------------------------------------------
+        // 4) TẠO ENTITY ORDER (chưa có OrderItem)
+        // ------------------------------------------------------------
         Order order = Order.builder()
                 .orderCode(generateOrderCode())   // Mã đơn tự sinh
                 .totalPrice(totalPrice)
-                .status(OrderStatus.NEW)
+                .status(OrderStatus.NEW)          // Trạng thái ban đầu
                 .note(req.getNote())
                 .createdBy(userId)
                 .build();
 
         Order saved = orderRepository.save(order);
 
-        // =====================================================================
-        // MODULE 16 – GÁN BÀN CHO ORDER (nếu FE gửi tableId)
-        // =====================================================================
-        if (req.getTableId() != null) {
+        // ------------------------------------------------------------
+        // 5) GÁN BÀN CHO ORDER (nếu có tableId)
+        // ------------------------------------------------------------
+        if (tableId != null) {
             // Đánh dấu bàn đang được sử dụng (OCCUPIED)
-            RestaurantTable table = restaurantTableService.markTableOccupied(req.getTableId());
+            RestaurantTable table = restaurantTableService.markTableOccupied(tableId);
 
             // Gán bàn cho order
             saved.setTable(table);
@@ -135,9 +225,54 @@ public class OrderService {
             orderRepository.save(saved);
         }
 
-        // =====================================================================
-        // GỬI THÔNG BÁO: Tạo order mới
-        // =====================================================================
+        // ------------------------------------------------------------
+        // 6) TẠO DANH SÁCH ORDER ITEM THEO ENTITY MỚI
+        // ------------------------------------------------------------
+        // Đọc cấu hình tự động gửi bếp
+        boolean autoSendKitchen = isAutoSendKitchen();
+
+        List<OrderItem> orderItems = new ArrayList<>();
+
+        for (OrderItemRequest itemReq : req.getItems()) {
+
+            Dish dish = dishMap.get(itemReq.getDishId());
+            if (dish == null) {
+                throw new RuntimeException("Món ăn với ID " + itemReq.getDishId() + " không tồn tại");
+            }
+
+            // Giá snapshot tại thời điểm order (theo Rule 26 – BigDecimal)
+            BigDecimal snapshotPrice = dish.getPrice();
+
+            // Trạng thái ban đầu của món:
+            //  - Nếu auto_send_kitchen = true → coi như đã gửi bếp ngay lập tức
+            //  - Nếu false → để NEW, chờ nhân viên bấm "Gửi bếp" sau
+            OrderItemStatus initialStatus = autoSendKitchen
+                    ? OrderItemStatus.SENT_TO_KITCHEN
+                    : OrderItemStatus.NEW;
+
+            OrderItem oi = OrderItem.builder()
+                    .order(saved)                // Quan hệ ManyToOne tới Order
+                    .dish(dish)                  // Quan hệ ManyToOne tới Dish
+                    .snapshotPrice(snapshotPrice)// Giá snapshot
+                    .quantity(itemReq.getQuantity())
+                    .status(initialStatus)       // Trạng thái khởi tạo theo setting
+                    .note(null)                  // Tạm thời chưa dùng ghi chú món
+                    .build();
+
+            orderItems.add(oi);
+        }
+
+        orderItemRepository.saveAll(orderItems);
+
+        // ------------------------------------------------------------
+        // 7) TRỪ KHO THEO RECIPE (giữ nguyên logic cũ)
+        // ------------------------------------------------------------
+        consumeStockForOrder(saved, orderItems);
+
+        // ------------------------------------------------------------
+        // 8) GỬI THÔNG BÁO + AUDIT LOG
+        // ------------------------------------------------------------
+        // Thông báo tạo order mới
         CreateNotificationRequest re = new CreateNotificationRequest();
         re.setTitle("Tạo order mới");
         re.setType(NotificationType.ORDER);
@@ -145,24 +280,7 @@ public class OrderService {
         re.setLink("");
         notificationService.createNotification(re);
 
-        // 5) Tạo danh sách OrderItem
-        List<OrderItem> orderItems = new ArrayList<>();
-        for (OrderItemRequest itemReq : req.getItems()) {
-            OrderItem oi = OrderItem.builder()
-                    .orderId(order.getId())
-                    .dishId(itemReq.getDishId())
-                    .quantity(itemReq.getQuantity())
-                    .build();
-            orderItems.add(oi);
-        }
-        orderItemRepository.saveAll(orderItems);
-
-        // 6) Trừ kho theo RecipeItem (tiêu nguyên liệu)
-        consumeStockForOrder(order, orderItems);
-
-        // =====================================================================
-        // GỬI THÔNG BÁO: Tiêu nguyên liệu
-        // =====================================================================
+        // Thông báo tiêu nguyên liệu
         CreateNotificationRequest res = new CreateNotificationRequest();
         res.setTitle("Tiêu nguyên liệu");
         res.setType(NotificationType.ORDER);
@@ -170,17 +288,19 @@ public class OrderService {
         res.setLink("");
         notificationService.createNotification(res);
 
-        // ✅ Audit log tạo order
+        // Audit log tạo order
         auditLogService.log(
                 AuditAction.ORDER_CREATE,
                 "order",
-                order.getId(),
+                saved.getId(),
                 null,
-                order
+                saved
         );
 
-        // 7) Trả về DTO order đầy đủ
-        return toOrderResponse(order, orderItems, dishMap);
+        // ------------------------------------------------------------
+        // 9) TRẢ VỀ DTO ORDER RESPONSE
+        // ------------------------------------------------------------
+        return toOrderResponse(saved, orderItems);
     }
 
     /**
@@ -221,28 +341,22 @@ public class OrderService {
 
         // Lấy toàn bộ orderId để load orderItem
         List<Long> orderIds = orders.stream().map(Order::getId).toList();
+
+        // Lấy toàn bộ OrderItem thuộc các order này
         List<OrderItem> allItems = orderItemRepository.findAll()
                 .stream()
-                .filter(oi -> orderIds.contains(oi.getOrderId()))
+                .filter(oi -> orderIds.contains(oi.getOrder().getId()))
                 .toList();
 
-        // Lấy toàn bộ dishId để map thông tin món
-        Set<Long> dishIds = allItems.stream()
-                .map(OrderItem::getDishId)
-                .collect(Collectors.toSet());
-        Map<Long, Dish> dishMap = dishRepository.findAllById(dishIds)
-                .stream()
-                .collect(Collectors.toMap(Dish::getId, d -> d));
-
-        // Group orderItem theo orderId
+        // Group orderItem theo order.id
         Map<Long, List<OrderItem>> itemsByOrder = allItems.stream()
-                .collect(Collectors.groupingBy(OrderItem::getOrderId));
+                .collect(Collectors.groupingBy(oi -> oi.getOrder().getId()));
 
         // Convert từng order → OrderResponse
         List<OrderResponse> result = new ArrayList<>();
         for (Order o : orders) {
             List<OrderItem> items = itemsByOrder.getOrDefault(o.getId(), List.of());
-            result.add(toOrderResponse(o, items, dishMap));
+            result.add(toOrderResponse(o, items));
         }
 
         return result;
@@ -256,17 +370,9 @@ public class OrderService {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy đơn hàng"));
 
-        List<OrderItem> items = orderItemRepository.findByOrderId(orderId);
+        List<OrderItem> items = orderItemRepository.findByOrder_Id(orderId);
 
-        // Lấy danh sách dish 1 lần
-        Set<Long> dishIds = items.stream()
-                .map(OrderItem::getDishId)
-                .collect(Collectors.toSet());
-        Map<Long, Dish> dishMap = dishRepository.findAllById(dishIds)
-                .stream()
-                .collect(Collectors.toMap(Dish::getId, d -> d));
-
-        return toOrderResponse(order, items, dishMap);
+        return toOrderResponse(order, items);
     }
 
     // =================================================================
@@ -303,7 +409,7 @@ public class OrderService {
 
         // Nếu chuyển sang CANCELED → hoàn kho
         if (newStatus == OrderStatus.CANCELED) {
-            List<OrderItem> items = orderItemRepository.findByOrderId(orderId);
+            List<OrderItem> items = orderItemRepository.findByOrder_Id(orderId);
             restoreStockForOrder(order, items);
         }
 
@@ -379,15 +485,22 @@ public class OrderService {
             throw new RuntimeException("Không thể xóa đơn hàng đã thanh toán hoặc đã hủy");
         }
 
-        List<OrderItem> items = orderItemRepository.findByOrderId(orderId);
+        List<OrderItem> items = orderItemRepository.findByOrder_Id(orderId);
 
         // Hoàn kho trước rồi mới xóa order
         restoreStockForOrder(order, items);
 
-        orderItemRepository.deleteByOrderId(orderId);
+        // 🔥 GIẢI PHÓNG BÀN
+        RestaurantTable table = order.getTable();
+        if (table != null) {
+            restaurantTableService.markTableAvailable(table.getId());
+        }
+
+        // Xóa item + order
+        orderItemRepository.deleteByOrder_Id(orderId);
         orderRepository.delete(order);
 
-        // ✅ Audit log cancel order
+        // Audit log
         auditLogService.log(
                 AuditAction.ORDER_CANCEL,
                 "order",
@@ -395,6 +508,7 @@ public class OrderService {
                 null,
                 order
         );
+
     }
 
 
@@ -411,7 +525,7 @@ public class OrderService {
      */
     private void consumeStockForOrder(Order order, List<OrderItem> orderItems) {
         for (OrderItem item : orderItems) {
-            Long dishId = item.getDishId();
+            Long dishId = item.getDish().getId();
             Integer orderQty = item.getQuantity();
 
             List<RecipeItem> recipes = recipeItemRepository.findByDishId(dishId);
@@ -449,7 +563,7 @@ public class OrderService {
      */
     private void restoreStockForOrder(Order order, List<OrderItem> orderItems) {
         for (OrderItem item : orderItems) {
-            Long dishId = item.getDishId();
+            Long dishId = item.getDish().getId();
             Integer orderQty = item.getQuantity();
 
             List<RecipeItem> recipes = recipeItemRepository.findByDishId(dishId);
@@ -483,21 +597,24 @@ public class OrderService {
     // =================================================================
 
     /**
-     * Convert Order + danh sách OrderItem + Map Dish → OrderResponse
+     * Convert Order + danh sách OrderItem → OrderResponse
      */
     private OrderResponse toOrderResponse(Order order,
-                                          List<OrderItem> items,
-                                          Map<Long, Dish> dishMap) {
+                                          List<OrderItem> items) {
 
         List<OrderItemResponse> itemResponses = new ArrayList<>();
 
         for (OrderItem item : items) {
-            Dish dish = dishMap.get(item.getDishId());
+            Dish dish = item.getDish();
             if (dish == null) {
-                continue; // Không tìm thấy món, bỏ qua (tránh crash)
+                continue; // Phòng trường hợp dữ liệu lỗi
             }
 
-            BigDecimal price = dish.getPrice();
+            // Ưu tiên dùng snapshotPrice, nếu null thì fallback về dish.price
+            BigDecimal price = item.getSnapshotPrice() != null
+                    ? item.getSnapshotPrice()
+                    : dish.getPrice();
+
             BigDecimal qty = BigDecimal.valueOf(item.getQuantity());
             BigDecimal subtotal = price.multiply(qty);
 
@@ -507,6 +624,8 @@ public class OrderService {
                     .dishPrice(price)
                     .quantity(item.getQuantity())
                     .subtotal(subtotal)
+                    .status(item.getStatus())
+                    .note(item.getNote())
                     .build();
 
             itemResponses.add(itemRes);
@@ -563,23 +682,39 @@ public class OrderService {
      * Cập nhật lại danh sách món trong order.
      * ------------------------------------------------------------
      * Dùng cho POS:
-     *  - Khi nhân viên chọn thêm các món mới rồi nhấn "Gửi Order"
+     *  - Khi nhân viên thêm / bớt món rồi nhấn "Gửi Order"
      *  - Nếu bàn đã có order đang mở (NEW / SERVING)
      *    → hệ thống sửa lại danh sách món hiện tại
      *
-     * Quy trình:
-     *  1. Lấy username từ JWT (không cần FE gửi)
-     *  2. Tìm order theo orderId
-     *  3. Kiểm tra order hợp lệ (không được sửa nếu PAID hoặc CANCELED)
-     *  4. Xóa danh sách OrderItem cũ
-     *  5. Thêm danh sách món mới
-     *  6. Tính lại tổng tiền
-     *  7. Lưu order + trả về OrderResponse đầy đủ
+     * OPTION 1 – NHIỀU ORDER_ITEM CHO CÙNG 1 MÓN:
+     *  - 1 dishId có thể có nhiều OrderItem (VD: phần cũ đã gửi bếp,
+     *    phần mới vẫn ở trạng thái NEW)
+     *  - Không còn constraint UNIQUE (order_id, dish_id) ở DB
+     *  - Trong code:
+     *      + Group theo dishId → List<OrderItem>
+     *      + So sánh số lượng mới (từ FE) với tổng số lượng hiện tại
+     *      + Phần chênh lệch nếu là "gọi thêm" → tạo OrderItem mới
+     *
+     * Quy tắc chính:
+     *  - Không được sửa order đã thanh toán (PAID) hoặc đã hủy (CANCELED)
+     *  - Nếu trong 1 món có item COOKING / DONE / SENT_TO_KITCHEN (bị khóa):
+     *      + Không cho GIẢM tổng quantity
+     *      + newQty > oldQty → tạo OrderItem mới cho phần chênh lệch
+     *      + newQty = oldQty → giữ nguyên, không sửa gì
+     *  - Nếu tất cả item của món đều là NEW hoặc SENT_TO_KITCHEN (và
+     *    cho phép sửa sau khi gửi bếp):
+     *      + Có thể tăng / giảm quantity
+     *      + newQty = 0 và allowCancelItem = true → set CANCELED cho tất cả
+     * ------------------------------------------------------------
+     * @param orderId  id order cần sửa
+     * @param reqItems danh sách món FE gửi lên (mỗi dish 1 dòng, quantity tổng)
      */
     @Transactional
-    public OrderResponse updateOrderItems(Long orderId, List<OrderItemRequest> newItems) {
+    public OrderResponse updateOrderItems(Long orderId, List<OrderItemRequest> reqItems) {
 
-        // 1) Load order
+        // ----------------------------------------------------------------
+        // 1. Lấy order + validate trạng thái
+        // ----------------------------------------------------------------
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy order"));
 
@@ -587,56 +722,223 @@ public class OrderService {
             throw new RuntimeException("Không thể sửa đơn đã thanh toán hoặc đã hủy");
         }
 
-        // ----------------------------------------------------------------
-        // 🔧 TÍCH HỢP CẤU HÌNH POS: pos.allow_edit_after_send
-        // ----------------------------------------------------------------
-        //  - Nếu cấu hình = false:
-        //      + Chỉ cho phép sửa món khi order đang ở trạng thái NEW
-        //      + Khi đã chuyển sang SERVING (coi như đã gửi bếp) → khóa sửa
-        //  - Nếu cấu hình = true:
-        //      + Cho phép sửa cả khi SERVING (giữ hành vi linh hoạt hơn)
-        // ----------------------------------------------------------------
-        boolean allowEditAfterSend = systemSettingService.getBooleanSetting(
-                "pos.allow_edit_after_send",
-                false // default: KHÔNG cho phép sửa sau khi gửi bếp
-        );
-        if (!allowEditAfterSend && order.getStatus() != OrderStatus.NEW) {
-            throw new RuntimeException("Không được sửa món sau khi đơn đã gửi bếp/đang phục vụ.");
-        }
+        boolean allowEditAfterSend = isAllowEditAfterSend();
+        boolean allowCancelItem = isAllowCancelItem();
+        boolean autoSendKitchen = isAutoSendKitchen();
 
-        // 2) Xóa toàn bộ item cũ
-        orderItemRepository.deleteByOrderId(orderId);
+        // ----------------------------------------------------------------
+        // 2. Lấy toàn bộ OrderItem hiện tại của order
+        //    và group theo dishId → List<OrderItem>
+        // ----------------------------------------------------------------
+        List<OrderItem> existingItems = orderItemRepository.findByOrder_Id(orderId);
 
-        // 3) Tính tổng tiền mới
-        BigDecimal total = BigDecimal.ZERO;
+        // Map<dishId, List<OrderItem>> – cho phép nhiều item cùng 1 món
+        Map<Long, List<OrderItem>> existingMap = existingItems.stream()
+                .collect(Collectors.groupingBy(oi -> oi.getDish().getId()));
 
         List<OrderItem> toSave = new ArrayList<>();
 
-        for (OrderItemRequest req : newItems) {
+        // Dùng để biết dishId nào vẫn còn trong request (sau này xử lý xoá)
+        Set<Long> reqDishIds = reqItems.stream()
+                .map(OrderItemRequest::getDishId)
+                .collect(Collectors.toSet());
 
-            Dish dish = dishRepository.findById(req.getDishId())
+        // ============================================================
+        // 3. Xử lý từng món trong request (mỗi dishId xuất hiện 1 lần)
+        // ============================================================
+        for (OrderItemRequest req : reqItems) {
+
+            Long dishId = req.getDishId();
+            int newQty = req.getQuantity();
+
+            Dish dish = dishRepository.findById(dishId)
                     .orElseThrow(() -> new RuntimeException("Món không tồn tại"));
 
-            BigDecimal subtotal = dish.getPrice().multiply(BigDecimal.valueOf(req.getQuantity()));
-            total = total.add(subtotal);
+            // Danh sách OrderItem hiện có của món này (có thể rỗng)
+            List<OrderItem> dishItems = existingMap.getOrDefault(dishId, new ArrayList<>());
 
-            OrderItem item = OrderItem.builder()
-                    .orderId(orderId)
-                    .dishId(req.getDishId())
-                    .quantity(req.getQuantity())
-                    .build();
+            // Các item đang "active" (không bị hủy)
+            List<OrderItem> activeItems = dishItems.stream()
+                    .filter(oi -> oi.getStatus() != OrderItemStatus.CANCELED)
+                    .collect(Collectors.toList());
 
-            toSave.add(item);
+            // --------------------------------------------------------
+            // 3.1. Trường hợp món hoàn toàn mới (chưa có OrderItem nào)
+            // --------------------------------------------------------
+            if (activeItems.isEmpty()) {
+
+                // Nếu quantity <= 0 → coi như không order món này
+                if (newQty <= 0) {
+                    continue;
+                }
+
+                // Trạng thái khởi tạo theo POS setting
+                OrderItemStatus initialStatus = autoSendKitchen
+                        ? OrderItemStatus.SENT_TO_KITCHEN
+                        : OrderItemStatus.NEW;
+
+                OrderItem newItem = OrderItem.builder()
+                        .order(order)
+                        .dish(dish)
+                        .snapshotPrice(dish.getPrice())
+                        .quantity(newQty)
+                        .status(initialStatus)
+                        .note(req.getNote())
+                        .build();
+
+                toSave.add(newItem);
+                continue;
+            }
+
+            // --------------------------------------------------------
+            // 3.2. Món đã tồn tại trong order → tính tổng quantity hiện tại
+            // --------------------------------------------------------
+            int currentTotalQty = activeItems.stream()
+                    .mapToInt(OrderItem::getQuantity)
+                    .sum();
+
+            boolean hasCookingOrDone = activeItems.stream().anyMatch(oi ->
+                    oi.getStatus() == OrderItemStatus.COOKING
+                            || oi.getStatus() == OrderItemStatus.DONE
+            );
+
+            boolean hasSentLocked = activeItems.stream().anyMatch(oi ->
+                    oi.getStatus() == OrderItemStatus.SENT_TO_KITCHEN && !allowEditAfterSend
+            );
+
+            // ========================================================
+            // CASE A: Có item đang COOKING / DONE / SENT (không cho sửa)
+            //  → xem như phần hiện tại là "khoá" số lượng
+            //  → chỉ cho gọi thêm, không cho giảm
+            // ========================================================
+            if (hasCookingOrDone || hasSentLocked) {
+
+                if (newQty < currentTotalQty) {
+                    // Không được giảm phần đã gửi bếp / đang nấu / đã xong
+                    throw new RuntimeException(
+                            "Không thể giảm số lượng món đang chế biến / đã gửi bếp: " + dish.getName()
+                    );
+                }
+
+                if (newQty == currentTotalQty) {
+                    // Không thay đổi gì → giữ nguyên các OrderItem cũ
+                    continue;
+                }
+
+                // newQty > currentTotalQty → khách gọi thêm
+                int additional = newQty - currentTotalQty;
+
+                OrderItemStatus initialStatus = autoSendKitchen
+                        ? OrderItemStatus.SENT_TO_KITCHEN
+                        : OrderItemStatus.NEW;
+
+                OrderItem extraItem = OrderItem.builder()
+                        .order(order)
+                        .dish(dish)
+                        .snapshotPrice(dish.getPrice())  // snapshot giá hiện tại
+                        .quantity(additional)
+                        .status(initialStatus)
+                        .note(req.getNote())             // ghi chú cho phần gọi thêm (nếu có)
+                        .build();
+
+                toSave.add(extraItem);
+                continue;
+            }
+
+            // ========================================================
+            // CASE B: Không có item COOKING / DONE / SENT bị khóa
+            //  → Tất cả đều ở trạng thái:
+            //      NEW
+            //      hoặc SENT_TO_KITCHEN nhưng allowEditAfterSend = true
+            //  → Có thể tăng/giảm số lượng, hủy món nếu allowCancelItem
+            // ========================================================
+
+            // B1. newQty = 0 → hủy toàn bộ món này
+            if (newQty == 0) {
+                if (!allowCancelItem) {
+                    throw new RuntimeException("Không được phép hủy món theo cấu hình POS");
+                }
+
+                for (OrderItem oi : activeItems) {
+                    oi.setStatus(OrderItemStatus.CANCELED);
+                    toSave.add(oi);
+                }
+                continue;
+            }
+
+            // B2. newQty > 0 → gộp về 1 item chính, các item còn lại hủy (nếu được)
+            //     Mục tiêu:
+            //       - Database không phình ra quá nhiều dòng NEW trùng nhau
+            //       - FE luôn gửi 1 dòng / 1 dish → quantity tổng
+
+            // Item chính (lấy item đầu tiên trong danh sách active)
+            OrderItem mainItem = activeItems.get(0);
+            mainItem.setQuantity(newQty);
+            mainItem.setNote(req.getNote()); // cập nhật note mới (nếu cần)
+            toSave.add(mainItem);
+
+            // Các item thừa còn lại → nếu cho phép hủy thì set CANCELED
+            for (int i = 1; i < activeItems.size(); i++) {
+                OrderItem extra = activeItems.get(i);
+                if (allowCancelItem) {
+                    extra.setStatus(OrderItemStatus.CANCELED);
+                }
+                toSave.add(extra);
+            }
         }
 
-        // 4) Lưu lại toàn bộ item mới
-        orderItemRepository.saveAll(toSave);
+        // ============================================================
+        // 4. Xử lý các OrderItem KHÔNG còn xuất hiện trong request
+        //    (tức là FE không gửi dishId đó nữa) → coi như hủy món
+        // ============================================================
+        for (OrderItem ex : existingItems) {
+            Long dishId = ex.getDish().getId();
 
-        // 5) Cập nhật tổng tiền order
+            // Nếu dishId vẫn còn trong request → đã xử lý ở bước 3
+            if (reqDishIds.contains(dishId)) {
+                continue;
+            }
+
+            // Nếu không cho hủy món → chặn
+            if (!allowCancelItem) {
+                throw new RuntimeException("Không được phép hủy món theo cấu hình POS.");
+            }
+
+            // Không cho hủy món đã gửi bếp mà không cho sửa
+            if (ex.getStatus() == OrderItemStatus.SENT_TO_KITCHEN && !allowEditAfterSend) {
+                throw new RuntimeException("Không thể hủy món đã gửi bếp: " + ex.getDish().getName());
+            }
+
+            // Không cho hủy món đang nấu / đã xong
+            if (ex.getStatus() == OrderItemStatus.COOKING || ex.getStatus() == OrderItemStatus.DONE) {
+                throw new RuntimeException("Không thể hủy món đang chế biến: " + ex.getDish().getName());
+            }
+
+            // Thực tế: thay vì DELETE luôn, ta set CANCELED cho thống nhất
+            ex.setStatus(OrderItemStatus.CANCELED);
+            toSave.add(ex);
+        }
+
+        // ============================================================
+        // 5. Lưu thay đổi + tính lại tổng tiền
+        // ============================================================
+        // Lưu toàn bộ item mới / item đã cập nhật
+        if (!toSave.isEmpty()) {
+            orderItemRepository.saveAll(toSave);
+        }
+
+        // Lấy lại toàn bộ OrderItem sau khi update để tính tổng tiền
+        List<OrderItem> updatedItems = orderItemRepository.findByOrder_Id(orderId);
+
+        BigDecimal total = updatedItems.stream()
+                .filter(oi -> oi.getStatus() != OrderItemStatus.CANCELED)
+                .map(oi -> oi.getSnapshotPrice().multiply(BigDecimal.valueOf(oi.getQuantity())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
         order.setTotalPrice(total);
         orderRepository.save(order);
 
-        // 6) Trả về OrderResponse
-        return getOrderDetail(orderId);
+        // Trả về OrderResponse mới nhất
+        return toOrderResponse(order, updatedItems);
     }
 }

@@ -105,4 +105,22 @@ public class TableController {
         restaurantTableService.updateTableStatus(request);
         return ResponseEntity.ok().build();
     }
+
+    /**
+     * API trả về danh sách bàn dành riêng cho POS TABLE PAGE.
+     * --------------------------------------------------------------
+     * Mỗi phần tử bao gồm:
+     *  - Thông tin bàn (id, name, status)
+     *  - Nếu có order mở → kèm orderId, orderCode, orderCreatedAt
+     *  - Thống kê món trong order: totalItems, newItems, cookingItems, doneItems
+     *  - waitingForPayment = true nếu order.status = SERVING
+     *
+     * URL: GET /api/tables/pos-status
+     */
+    @GetMapping("/pos-status")
+    public ResponseEntity<List<PosTableStatusResponse>> getPosTableStatuses() {
+        List<PosTableStatusResponse> list = restaurantTableService.getPosTableStatuses();
+        return ResponseEntity.ok(list);
+    }
+
 }

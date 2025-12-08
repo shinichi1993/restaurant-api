@@ -7,6 +7,10 @@ import com.restaurant.api.enums.OrderStatus;
 import com.restaurant.api.enums.TableStatus;
 import com.restaurant.api.repository.OrderRepository;
 import com.restaurant.api.repository.RestaurantTableRepository;
+import com.restaurant.api.dto.table.PosTableStatusResponse;
+import com.restaurant.api.entity.OrderItem;
+import com.restaurant.api.enums.OrderItemStatus;
+import com.restaurant.api.repository.OrderItemRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -24,6 +28,7 @@ public class RestaurantTableService {
 
     private final RestaurantTableRepository restaurantTableRepository;
     private final OrderRepository orderRepository;
+    private final OrderItemRepository orderItemRepository;
 
     /**
      * Tạo bàn mới.
@@ -246,5 +251,92 @@ public class RestaurantTableService {
                 .createdAt(table.getCreatedAt())
                 .updatedAt(table.getUpdatedAt())
                 .build();
+    }
+    /**
+     * Lấy danh sách bàn + thông tin ORDER hiện tại cho màn hình POS.
+     * ------------------------------------------------------------
+     * Quy ước:
+     *  - Order đang mở = trạng thái NEW hoặc SERVING
+     *  - Nếu không có order mở → trả về chỉ thông tin bàn
+     *  - Nếu có → kèm theo thống kê món:
+     *      + totalItems, newItems, cookingItems, doneItems
+     *      + waitingForPayment = true nếu order.status = SERVING
+     */
+    @Transactional(readOnly = true)
+    public List<PosTableStatusResponse> getPosTableStatuses() {
+
+        // 1) Lấy toàn bộ bàn
+        List<RestaurantTable> tables = restaurantTableRepository.findAll();
+
+        // 2) Các trạng thái order được xem là "đang mở"
+        List<OrderStatus> openStatuses = Arrays.asList(OrderStatus.NEW, OrderStatus.SERVING);
+
+        // 3) Map từng bàn → PosTableStatusResponse
+        return tables.stream()
+                .map(table -> {
+
+                    // Tìm order đang mở của bàn (nếu có)
+                    Order order = orderRepository
+                            .findFirstByTableIdAndStatusIn(table.getId(), openStatuses)
+                            .orElse(null);
+
+                    // Nếu KHÔNG có order mở → trả về thông tin bàn đơn thuần
+                    if (order == null) {
+                        return PosTableStatusResponse.builder()
+                                .tableId(table.getId())
+                                .tableName(table.getName())
+                                .status(table.getStatus().name())
+                                .orderId(null)
+                                .orderCode(null)
+                                .orderCreatedAt(null)
+                                .totalItems(0L)
+                                .newItems(0L)
+                                .cookingItems(0L)
+                                .doneItems(0L)
+                                .waitingForPayment(false)
+                                .build();
+                    }
+
+                    // Nếu CÓ order → lấy list item để thống kê
+                    // Nếu CẦN loại bỏ món đã hủy khỏi thống kê:
+                    List<OrderItem> items = orderItemRepository.findByOrder_Id(order.getId())
+                            .stream()
+                            .filter(i -> i.getStatus() != OrderItemStatus.CANCELED)
+                            .toList();
+
+                    long total = items.size();
+
+                    long newCount = items.stream()
+                            .filter(i -> i.getStatus() == OrderItemStatus.NEW)
+                            .count();
+
+                    long cookingCount = items.stream()
+                            .filter(i -> i.getStatus() == OrderItemStatus.SENT_TO_KITCHEN
+                                    || i.getStatus() == OrderItemStatus.COOKING)
+                            .count();
+
+                    long doneCount = items.stream()
+                            .filter(i -> i.getStatus() == OrderItemStatus.DONE)
+                            .count();
+
+
+                    return PosTableStatusResponse.builder()
+                            .tableId(table.getId())
+                            .tableName(table.getName())
+                            .status(table.getStatus().name())
+
+                            .orderId(order.getId())
+                            .orderCode(order.getOrderCode())
+                            .orderCreatedAt(order.getCreatedAt())
+
+                            .totalItems(total)
+                            .newItems(newCount)
+                            .cookingItems(cookingCount)
+                            .doneItems(doneCount)
+
+                            .waitingForPayment(order.getStatus() == OrderStatus.SERVING)
+                            .build();
+                })
+                .toList();
     }
 }

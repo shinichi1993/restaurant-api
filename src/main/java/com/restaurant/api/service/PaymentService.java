@@ -304,7 +304,7 @@ public class PaymentService {
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy user"));
 
         // B5: Lấy danh sách món order
-        var orderItems = orderItemRepository.findByOrderId(order.getId());
+        var orderItems = orderItemRepository.findByOrder_Id(order.getId());
 
         // =====================================================================
         // 🟢 B6: TẠO HÓA ĐƠN TRƯỚC (KHẮC PHỤC LỖI invoice_id = null)
