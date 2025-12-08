@@ -941,4 +941,191 @@ public class OrderService {
         // Trả về OrderResponse mới nhất
         return toOrderResponse(order, updatedItems);
     }
+
+    /**
+     * Tạo order nhanh cho chế độ Simple POS.
+     * ----------------------------------------------------------------
+     * Luồng dành riêng cho:
+     *  - pos.simple_pos_mode = true
+     *  - Quán nhỏ / takeaway: chọn món → thanh toán luôn.
+     *
+     * Khác với createOrder:
+     *  - Request đơn giản hơn (SimpleOrderRequest)
+     *  - Không xử lý logic update món phức tạp
+     *  - Không gửi bếp (OrderItem luôn ở trạng thái NEW)
+     *
+     * Bước xử lý:
+     *  1) Validate request (phải có ít nhất 1 món)
+     *  2) Kiểm tra POS Settings: simple_pos_mode + simple_pos_require_table
+     *  3) Load danh sách món, tính tổng tiền
+     *  4) Tạo Order với status = SERVING (cho phép thanh toán ngay)
+     *  5) Gán bàn (nếu có tableId) → markTableOccupied
+     *  6) Tạo OrderItem (snapshotPrice, status NEW, note từ request)
+     *  7) Trừ kho theo RecipeItem (giống createOrder)
+     *  8) Gửi notification + audit log
+     *  9) Trả về OrderResponse
+     */
+    @Transactional
+    public OrderResponse simpleCreate(SimpleOrderRequest req, String username) {
+
+        // ------------------------------------------------------------
+        // 1) VALIDATE CƠ BẢN
+        // ------------------------------------------------------------
+        if (req.getItems() == null || req.getItems().isEmpty()) {
+            throw new RuntimeException("Order phải có ít nhất 1 món (Simple POS).");
+        }
+
+        // Lấy userId từ username để set createdBy
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("Không tìm thấy user"));
+        Long userId = user.getId();
+
+        // ------------------------------------------------------------
+        // 2) ĐỌC CẤU HÌNH POS & VALIDATE THEO SIMPLE MODE
+        // ------------------------------------------------------------
+        boolean simplePosMode = isSimplePosMode();
+        boolean simplePosRequireTable = isSimplePosRequireTable();
+
+        if (!simplePosMode) {
+            // Nếu hệ thống chưa bật Simple POS → chặn luôn, tránh dùng nhầm API
+            throw new RuntimeException("Hệ thống chưa bật chế độ POS đơn giản (Simple POS Mode).");
+        }
+
+        Long tableId = req.getTableId();
+
+        if (simplePosRequireTable && tableId == null) {
+            // Nếu simple_pos_require_table = true thì bắt buộc phải chọn bàn
+            throw new RuntimeException("Chế độ POS đơn giản yêu cầu phải chọn bàn trước khi tạo order.");
+        }
+        // Nếu require_table = false → cho phép không gửi tableId (order mang tính "không gán bàn")
+
+        // ------------------------------------------------------------
+        // 3) LOAD DANH SÁCH MÓN & TÍNH TỔNG TIỀN
+        // ------------------------------------------------------------
+        List<Long> dishIds = req.getItems()
+                .stream()
+                .map(SimpleOrderItemRequest::getDishId)
+                .toList();
+
+        List<Dish> dishes = dishRepository.findAllById(dishIds);
+        if (dishes.size() != dishIds.size()) {
+            throw new RuntimeException("Có món ăn không tồn tại trong hệ thống (Simple POS).");
+        }
+
+        Map<Long, Dish> dishMap = dishes.stream()
+                .collect(Collectors.toMap(Dish::getId, d -> d));
+
+        BigDecimal totalPrice = BigDecimal.ZERO;
+        for (SimpleOrderItemRequest itemReq : req.getItems()) {
+            Dish dish = dishMap.get(itemReq.getDishId());
+            if (dish == null) {
+                throw new RuntimeException("Món ăn với ID " + itemReq.getDishId() + " không tồn tại.");
+            }
+            if (itemReq.getQuantity() == null || itemReq.getQuantity() <= 0) {
+                throw new RuntimeException("Số lượng món phải lớn hơn 0 (Simple POS).");
+            }
+
+            BigDecimal price = dish.getPrice();
+            BigDecimal qty = BigDecimal.valueOf(itemReq.getQuantity());
+            totalPrice = totalPrice.add(price.multiply(qty));
+        }
+
+        // ------------------------------------------------------------
+        // 4) TẠO ENTITY ORDER (status = SERVING để thanh toán ngay)
+        // ------------------------------------------------------------
+        Order order = Order.builder()
+                .orderCode(generateOrderCode())   // Mã đơn tự sinh
+                .totalPrice(totalPrice)
+                .status(OrderStatus.SERVING)      // Simple POS: coi như đang phục vụ, có thể thanh toán luôn
+                .note(null)                       // SimpleOrderRequest hiện chưa có note cho order
+                .createdBy(userId)
+                .build();
+
+        Order saved = orderRepository.save(order);
+
+        // ------------------------------------------------------------
+        // 5) GÁN BÀN CHO ORDER (nếu có tableId)
+        // ------------------------------------------------------------
+        if (tableId != null) {
+            // Đánh dấu bàn đang được sử dụng (OCCUPIED)
+            RestaurantTable table = restaurantTableService.markTableOccupied(tableId);
+
+            // Gán bàn cho order
+            saved.setTable(table);
+
+            // Lưu lại order sau khi gán bàn
+            orderRepository.save(saved);
+        }
+
+        // ------------------------------------------------------------
+        // 6) TẠO DANH SÁCH ORDER ITEM CHO SIMPLE POS
+        // ------------------------------------------------------------
+        List<OrderItem> orderItems = new ArrayList<>();
+
+        for (SimpleOrderItemRequest itemReq : req.getItems()) {
+
+            Dish dish = dishMap.get(itemReq.getDishId());
+            if (dish == null) {
+                throw new RuntimeException("Món ăn với ID " + itemReq.getDishId() + " không tồn tại.");
+            }
+
+            // Giá snapshot tại thời điểm order (theo Rule 26 – BigDecimal)
+            BigDecimal snapshotPrice = dish.getPrice();
+
+            // Simple POS: KHÔNG gửi bếp → luôn để NEW
+            OrderItemStatus initialStatus = OrderItemStatus.NEW;
+
+            OrderItem oi = OrderItem.builder()
+                    .order(saved)                // Quan hệ ManyToOne tới Order
+                    .dish(dish)                  // Quan hệ ManyToOne tới Dish
+                    .snapshotPrice(snapshotPrice)// Giá snapshot
+                    .quantity(itemReq.getQuantity())
+                    .status(initialStatus)       // Luôn NEW trong Simple POS
+                    .note(itemReq.getNote())     // Ghi chú món nếu có
+                    .build();
+
+            orderItems.add(oi);
+        }
+
+        orderItemRepository.saveAll(orderItems);
+
+        // ------------------------------------------------------------
+        // 7) TRỪ KHO THEO RECIPE (TÁI SỬ DỤNG HÀM CŨ)
+        // ------------------------------------------------------------
+        consumeStockForOrder(saved, orderItems);
+
+        // ------------------------------------------------------------
+        // 8) GỬI THÔNG BÁO + AUDIT LOG (GIỐNG createOrder)
+        // ------------------------------------------------------------
+        // Thông báo tạo order mới
+        CreateNotificationRequest re = new CreateNotificationRequest();
+        re.setTitle("Tạo order mới (Simple POS)");
+        re.setType(NotificationType.ORDER);
+        re.setMessage("Tạo order mới từ chế độ POS đơn giản");
+        re.setLink("");
+        notificationService.createNotification(re);
+
+        // Thông báo tiêu nguyên liệu
+        CreateNotificationRequest res = new CreateNotificationRequest();
+        res.setTitle("Tiêu nguyên liệu (Simple POS)");
+        res.setType(NotificationType.ORDER);
+        res.setMessage("Tiêu nguyên liệu khi tạo order Simple POS");
+        res.setLink("");
+        notificationService.createNotification(res);
+
+        // Audit log tạo order
+        auditLogService.log(
+                AuditAction.ORDER_CREATE,
+                "order",
+                saved.getId(),
+                null,
+                saved
+        );
+
+        // ------------------------------------------------------------
+        // 9) TRẢ VỀ DTO ORDER RESPONSE
+        // ------------------------------------------------------------
+        return toOrderResponse(saved, orderItems);
+    }
+
 }

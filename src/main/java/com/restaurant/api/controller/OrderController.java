@@ -186,4 +186,37 @@ public class OrderController {
     ) {
         return ResponseEntity.ok(orderService.updateOrderItems(orderId, req.getItems()));
     }
+
+    /**
+     * API tạo đơn gọi món cho chế độ Simple POS
+     * ------------------------------------------------------------
+     * URL:
+     *   - POST /api/orders/simple-create
+     *
+     * Chức năng:
+     *   - Dùng cho chế độ POS đơn giản (simple_pos_mode = true)
+     *   - Luồng xử lý nhanh:
+     *        + Chọn bàn (tùy setting)
+     *        + Chọn món
+     *        + Bấm thanh toán → thanh toán luôn
+     *
+     * Khác biệt với API createOrder:
+     *   - Request dùng SimpleOrderRequest (tableId + items đơn giản)
+     *   - Không xử lý logic nâng cao (update món, gửi bếp...),
+     *     chỉ tạo order + order_item cơ bản.
+     */
+    @PostMapping("/simple-create")
+    public ResponseEntity<OrderResponse> createSimpleOrder(
+            java.security.Principal principal,
+            @Valid @RequestBody SimpleOrderRequest req
+    ) {
+        // 👉 Lấy username từ JWT (giống createOrder)
+        String username = principal.getName();
+
+        // 👉 Gọi service xử lý luồng Simple POS
+        OrderResponse response = orderService.simpleCreate(req, username);
+
+        return ResponseEntity.ok(response);
+    }
+
 }
