@@ -320,10 +320,31 @@ public class PaymentService {
         // =====================================================================
         // 🟢 B7: TẠO PAYMENT (gắn invoice ngay lập tức)
         // =====================================================================
+
+        // B7.1: Lấy và validate số tiền khách trả
+        BigDecimal customerPaid = req.getCustomerPaid();
+        if (customerPaid == null) {
+            throw new RuntimeException("Số tiền khách trả không hợp lệ");
+        }
+
+        // Không cho thanh toán nếu khách trả < số tiền phải thanh toán
+        if (customerPaid.compareTo(expectedAmountWithVat) < 0) {
+            throw new RuntimeException("Số tiền khách trả không hợp lệ");
+        }
+
+        // B7.2: Tính tiền thừa (customerPaid - số tiền phải thanh toán)
+        BigDecimal changeAmount = customerPaid.subtract(expectedAmountWithVat);
+        if (changeAmount.compareTo(BigDecimal.ZERO) < 0) {
+            changeAmount = BigDecimal.ZERO; // chốt lại để tránh âm (phòng trường hợp làm tròn)
+        }
+
+        // B7.3: Tạo Payment
         Payment payment = Payment.builder()
                 .order(order)
-                .invoice(invoice)          // 🟢 KHÔNG ĐƯỢC ĐỂ SAU
-                .amount(req.getAmount())
+                .invoice(invoice)
+                .amount(expectedAmountWithVat)   // số tiền phải thanh toán (sau giảm + VAT)
+                .customerPaid(customerPaid)      // số tiền khách đưa
+                .changeAmount(changeAmount)      // tiền thừa
                 .method(req.getMethod())
                 .note(req.getNote())
                 .paidAt(LocalDateTime.now())
@@ -429,6 +450,8 @@ public class PaymentService {
                 .orderId(p.getOrder().getId())
                 .invoiceId(p.getInvoice() != null ? p.getInvoice().getId() : null)
                 .amount(p.getAmount())
+                .customerPaid(p.getCustomerPaid())
+                .changeAmount(p.getChangeAmount())
                 .method(p.getMethod())
                 .note(p.getNote())
                 .paidAt(p.getPaidAt())

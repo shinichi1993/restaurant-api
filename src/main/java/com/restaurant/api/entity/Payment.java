@@ -62,6 +62,14 @@ public class Payment {
     @Column(nullable = false)
     private BigDecimal amount;
 
+    // Số tiền khách trả
+    @Column(name = "customer_paid", nullable = false)
+    private BigDecimal customerPaid;
+
+    // Tiền thừa trả lại khách
+    @Column(name = "change_amount", nullable = false)
+    private BigDecimal changeAmount;
+
     // ---------------------------------------------------------
     // Phương thức thanh toán (enum)
     // Lưu dạng string trong DB

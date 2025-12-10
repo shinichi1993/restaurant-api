@@ -312,7 +312,7 @@ public class KitchenService {
                 // Bỏ order đã hủy
                 .filter(oi -> oi.getOrder().getStatus() != OrderStatus.CANCELED)
                 // Chỉ lấy món đang ở trạng thái NEW/SENT_TO_KITCHEN/COOKING
-                .filter(oi -> displayStatuses.contains(oi.getStatus()))
+                //.filter(oi -> displayStatuses.contains(oi.getStatus()))
                 // Sắp xếp theo thời điểm tạo ORDER (order cũ nằm trên)
                 .sorted(Comparator.comparing(
                         (OrderItem oi) -> oi.getOrder().getCreatedAt()

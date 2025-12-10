@@ -45,4 +45,7 @@ public class PaymentRequest {
      */
     private String voucherCode;
 
+    @NotNull(message = "Số tiền khách trả không được để trống")
+    private BigDecimal customerPaid;
+
 }

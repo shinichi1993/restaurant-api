@@ -33,6 +33,8 @@ public class PosTableStatusResponse {
     private String tableName;
     private String status;
 
+    private Integer capacity;
+
     private Long orderId;
     private String orderCode;
     private LocalDateTime orderCreatedAt;

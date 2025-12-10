@@ -37,4 +37,6 @@ public class PaymentResponse {
     private Long createdBy;       // User thực hiện thanh toán
     private LocalDateTime createdAt; // Ngày tạo bản ghi
     private Integer loyaltyEarnedPoint; // Điểm nhận được từ hóa đơn
+    private BigDecimal customerPaid;
+    private BigDecimal changeAmount;
 }

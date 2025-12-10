@@ -286,6 +286,7 @@ public class RestaurantTableService {
                                 .tableId(table.getId())
                                 .tableName(table.getName())
                                 .status(table.getStatus().name())
+                                .capacity(table.getCapacity())
                                 .orderId(null)
                                 .orderCode(null)
                                 .orderCreatedAt(null)
@@ -324,6 +325,7 @@ public class RestaurantTableService {
                             .tableId(table.getId())
                             .tableName(table.getName())
                             .status(table.getStatus().name())
+                            .capacity(table.getCapacity())
 
                             .orderId(order.getId())
                             .orderCode(order.getOrderCode())

@@ -256,7 +256,7 @@ public class OrderService {
                     .snapshotPrice(snapshotPrice)// Giá snapshot
                     .quantity(itemReq.getQuantity())
                     .status(initialStatus)       // Trạng thái khởi tạo theo setting
-                    .note(null)                  // Tạm thời chưa dùng ghi chú món
+                    .note(itemReq.getNote())                  // Tạm thời chưa dùng ghi chú món
                     .build();
 
             orderItems.add(oi);
@@ -300,6 +300,7 @@ public class OrderService {
         // ------------------------------------------------------------
         // 9) TRẢ VỀ DTO ORDER RESPONSE
         // ------------------------------------------------------------
+
         return toOrderResponse(saved, orderItems);
     }
 
@@ -356,7 +357,15 @@ public class OrderService {
         List<OrderResponse> result = new ArrayList<>();
         for (Order o : orders) {
             List<OrderItem> items = itemsByOrder.getOrDefault(o.getId(), List.of());
-            result.add(toOrderResponse(o, items));
+            //Lọc các món CANCELED trước khi trả về
+            List<OrderItem> filtered =
+                    items.stream()
+                            .filter(i -> i.getStatus() != OrderItemStatus.CANCELED)
+                            .toList();
+
+            result.add(toOrderResponse(o, filtered));
+
+            //result.add(toOrderResponse(o, items));
         }
 
         return result;
@@ -372,7 +381,14 @@ public class OrderService {
 
         List<OrderItem> items = orderItemRepository.findByOrder_Id(orderId);
 
-        return toOrderResponse(order, items);
+        // Lọc các order là CANCELED trước khi trả về
+        List<OrderItem> filtered =
+                items.stream()
+                        .filter(i -> i.getStatus() != OrderItemStatus.CANCELED)
+                        .toList();
+
+        return toOrderResponse(order, filtered);
+        //return toOrderResponse(order, items);
     }
 
     // =================================================================
@@ -603,8 +619,14 @@ public class OrderService {
                                           List<OrderItem> items) {
 
         List<OrderItemResponse> itemResponses = new ArrayList<>();
+        BigDecimal total = BigDecimal.ZERO;
 
         for (OrderItem item : items) {
+            // ❗ BỎ QUA MÓN ĐÃ HỦY
+            if (item.getStatus() == OrderItemStatus.CANCELED) {
+                continue;
+            }
+
             Dish dish = item.getDish();
             if (dish == null) {
                 continue; // Phòng trường hợp dữ liệu lỗi
@@ -617,6 +639,9 @@ public class OrderService {
 
             BigDecimal qty = BigDecimal.valueOf(item.getQuantity());
             BigDecimal subtotal = price.multiply(qty);
+
+            // ❗ Chỉ cộng tiền món hợp lệ (ko tính các món đã CANCELED)
+            total = total.add(subtotal);
 
             OrderItemResponse itemRes = OrderItemResponse.builder()
                     .dishId(dish.getId())
@@ -631,10 +656,11 @@ public class OrderService {
             itemResponses.add(itemRes);
         }
 
+        // ❗ Cập nhật lại totalPrice — luôn đúng, không cần FE tính lại
         return OrderResponse.builder()
                 .id(order.getId())
                 .orderCode(order.getOrderCode())
-                .totalPrice(order.getTotalPrice())
+                .totalPrice(total)
                 .status(order.getStatus())
                 .note(order.getNote())
                 .createdBy(order.getCreatedBy())
@@ -1072,15 +1098,22 @@ public class OrderService {
             // Giá snapshot tại thời điểm order (theo Rule 26 – BigDecimal)
             BigDecimal snapshotPrice = dish.getPrice();
 
-            // Simple POS: KHÔNG gửi bếp → luôn để NEW
-            OrderItemStatus initialStatus = OrderItemStatus.NEW;
+            // Simple POS: KHÔNG gửi bếp → luôn coi như đã hoàn thành
+            // ------------------------------------------------------------
+            // Lý do:
+            //  - Món Simple POS chỉ dùng để in hóa đơn / xem lịch sử
+            //  - Không cần hiển thị trên màn hình bếp (Kitchen)
+            //  - KitchenService chỉ lấy các món có status NEW/SENT_TO_KITCHEN/COOKING
+            //    nên DONE sẽ luôn bị bỏ qua.
+            // ------------------------------------------------------------
+            OrderItemStatus initialStatus = OrderItemStatus.DONE;
 
             OrderItem oi = OrderItem.builder()
                     .order(saved)                // Quan hệ ManyToOne tới Order
                     .dish(dish)                  // Quan hệ ManyToOne tới Dish
                     .snapshotPrice(snapshotPrice)// Giá snapshot
                     .quantity(itemReq.getQuantity())
-                    .status(initialStatus)       // Luôn NEW trong Simple POS
+                    .status(initialStatus)       // DONE → KHÔNG bao giờ lên Kitchen
                     .note(itemReq.getNote())     // Ghi chú món nếu có
                     .build();
 
