@@ -45,16 +45,69 @@ public class Invoice {
     private Long orderId; // ID đơn hàng gốc
 
     @Column(name = "total_amount", nullable = false)
-    private BigDecimal totalAmount; // Tổng tiền hóa đơn
+    private BigDecimal totalAmount; // Tổng tiền hóa đơn (sau giảm, đã VAT) – finalAmount snapshot
 
     /**
-     * discountAmount – Số tiền được giảm nhờ voucher (nếu có).
+     * discountAmount – Tổng số tiền giảm (voucher + discount mặc định).
      * ------------------------------------------------------------
-     * - Nếu không áp dụng voucher → có thể để null hoặc 0.
-     * - Được dùng để hiển thị chi tiết hóa đơn & báo cáo.
+     * - Đây là TỔNG giảm giá trên hóa đơn.
+     * - Chi tiết từng loại giảm được tách riêng:
+     *      + voucherDiscountAmount
+     *      + defaultDiscountAmount
      */
     @Column(name = "discount_amount")
     private BigDecimal discountAmount;
+
+    /**
+     * originalTotalAmount – Tổng tiền gốc TRƯỚC khi áp dụng bất kỳ giảm giá nào.
+     * ------------------------------------------------------------
+     * - Thường là tổng tiền món (sum dishPrice * quantity).
+     * - Dùng để hiển thị "Tổng gốc (trước giảm)" trên hóa đơn / báo cáo.
+     */
+    @Column(name = "original_total_amount")
+    private BigDecimal originalTotalAmount;
+
+    /**
+     * voucherDiscountAmount – Số tiền giảm do voucher.
+     * ------------------------------------------------------------
+     * - Nếu không có voucher → 0.
+     * - Nếu có nhiều loại voucher → tổng hợp lại.
+     */
+    @Column(name = "voucher_discount_amount")
+    private BigDecimal voucherDiscountAmount;
+
+    /**
+     * defaultDiscountAmount – Số tiền giảm do discount mặc định (SystemSetting).
+     * ------------------------------------------------------------
+     * - Ví dụ: giảm 5% cho tất cả hóa đơn.
+     */
+    @Column(name = "default_discount_amount")
+    private BigDecimal defaultDiscountAmount;
+
+    /**
+     * amountBeforeVat – Số tiền sau khi trừ toàn bộ giảm giá nhưng CHƯA cộng VAT.
+     * ------------------------------------------------------------
+     * - Đây là cơ sở để tính VAT: vatAmount = amountBeforeVat * vatRate.
+     */
+    @Column(name = "amount_before_vat")
+    private BigDecimal amountBeforeVat;
+
+    /**
+     * vatRate – Tỷ lệ VAT snapshot (%).
+     * ------------------------------------------------------------
+     * - Ví dụ: 10 = 10%.
+     * - Lưu lại tại thời điểm xuất hóa đơn, không phụ thuộc vào setting thay đổi sau này.
+     */
+    @Column(name = "vat_rate")
+    private BigDecimal vatRate;
+
+    /**
+     * vatAmount – Số tiền VAT snapshot.
+     * ------------------------------------------------------------
+     * - Được tính tại PaymentService, lưu cố định trong invoice.
+     */
+    @Column(name = "vat_amount")
+    private BigDecimal vatAmount;
 
     /**
      * voucherCode – Mã voucher đã áp dụng cho hóa đơn (nếu có).
@@ -78,6 +131,23 @@ public class Invoice {
 
     @Column(name = "loyalty_earned_point")
     private Integer loyaltyEarnedPoint; // ⭐ Số điểm tích được cho hóa đơn này
+
+    /**
+     * customerPaid – Số tiền khách hàng thực tế đã trả cho hóa đơn này.
+     * ------------------------------------------------------------
+     * - Snapshot từ Payment.customerPaid.
+     * - Dùng để hiển thị lại trên hóa đơn / báo cáo.
+     */
+    @Column(name = "customer_paid")
+    private BigDecimal customerPaid;
+
+    /**
+     * changeAmount – Tiền thừa đã trả lại khách.
+     * ------------------------------------------------------------
+     * - Snapshot từ Payment.changeAmount.
+     */
+    @Column(name = "change_amount")
+    private BigDecimal changeAmount;
 
     /**
      * Quan hệ 1 invoice → n invoice_item

@@ -78,7 +78,7 @@ public class PaymentService {
      *  - B7: Cập nhật trạng thái order → PAID
      */
     @Transactional
-    public PaymentResponse createPayment(PaymentRequest req, String username) {
+        public PaymentResponse createPayment(PaymentRequest req, String username) {
 
         // B1: Tìm order
         Order order = orderRepository.findById(req.getOrderId())
@@ -93,211 +93,50 @@ public class PaymentService {
         }
 
         // =====================================================================
-        // B3: Tính lại số tiền cần thanh toán (có xét đến voucher + discount mặc định)
+        // B3: TÍNH TOÁN SỐ TIỀN CẦN THANH TOÁN (DÙNG HÀM CHUNG)
         // =====================================================================
 
-        // Mặc định: không dùng voucher
-        BigDecimal discountAmount = BigDecimal.ZERO;      // Tổng số tiền giảm (voucher + default discount)
-        String appliedVoucherCode = null;                 // Mã voucher thực tế áp dụng (có thể null)
-        BigDecimal expectedAmount;                        // Số tiền cuối cùng cần thanh toán
+        CalcPaymentResponse calc = calculateAmountForOrder(order, req.getVoucherCode());
 
-        // Tổng tiền gốc của order (chưa áp dụng bất kỳ giảm giá nào)
-        BigDecimal orderTotal = order.getTotalPrice();
-        if (orderTotal == null) {
-            orderTotal = BigDecimal.ZERO;
+        BigDecimal expectedAmountWithVat = calc.getFinalAmount();
+
+        if (expectedAmountWithVat == null) {
+            expectedAmountWithVat = BigDecimal.ZERO;
         }
 
-        String voucherCode = req.getVoucherCode();
+        // =====================================================================
+        // TÍNH TIỀN KHÁCH TRẢ & TIỀN THỪA (snapshot sang Invoice + Payment)
+        // =====================================================================
 
-        if (voucherCode != null && !voucherCode.trim().isEmpty()) {
-            // Nếu FE gửi voucherCode → gọi lại VoucherService để tính toán chính xác
-            VoucherApplyRequest applyReq = new VoucherApplyRequest();
-            applyReq.setOrderId(order.getId());
-            applyReq.setVoucherCode(voucherCode.trim());
+        // Số tiền khách đưa (FE gửi lên)
+        BigDecimal customerPaid = req.getCustomerPaid();
+        if (customerPaid == null) customerPaid = BigDecimal.ZERO;
 
-            // Hàm này sẽ:
-            //  - Kiểm tra hiệu lực voucher
-            //  - Kiểm tra minOrderAmount, usageLimit
-            //  - Tính discountAmount & finalAmount (sau khi trừ voucher,  CHƯA VAT)
-            VoucherApplyResponse applyRes = voucherService.applyVoucher(applyReq);
+        // Số tiền phải trả thực tế
+        BigDecimal mustPay = expectedAmountWithVat != null ? expectedAmountWithVat : BigDecimal.ZERO;
 
-            BigDecimal voucherDiscount = applyRes.getDiscountAmount();
-            if (voucherDiscount == null) {
-                voucherDiscount = BigDecimal.ZERO;
-            }
-
-            discountAmount = voucherDiscount;
-            expectedAmount = applyRes.getFinalAmount(); // số tiền sau khi áp dụng voucher
-            appliedVoucherCode = applyRes.getVoucherCode();
-        } else {
-            // Không dùng voucher → số tiền cần thanh toán trước khi áp dụng discount mặc định
-            expectedAmount = orderTotal;
+        // Tiền thừa trả khách
+        BigDecimal changeAmount = customerPaid.subtract(mustPay);
+        if (changeAmount.compareTo(BigDecimal.ZERO) < 0) {
+            // Không cho âm – FE validation đảm bảo khách phải trả ≥ finalAmount,
+            // nhưng vẫn để chặn cho chắc.
+            changeAmount = BigDecimal.ZERO;
         }
 
-        // -----------------------------------------------------------------
-        // 🚩 TÍCH HỢP DISCOUNT TỪ SYSTEM SETTING (Module 20)
-        // -----------------------------------------------------------------
-        // Các cấu hình sử dụng:
-        //  - discount.default_percent      → % giảm mặc định
-        //  - discount.max_percent          → % giảm tối đa cho 1 hóa đơn
-        //  - discount.allow_with_voucher   → có cho phép giảm thêm khi đã dùng voucher hay không
-        // -----------------------------------------------------------------
-
-        // Đọc cấu hình từ SystemSetting
-        BigDecimal defaultDiscountPercent = systemSettingService.getNumberSetting(
-                "discount.default_percent",
-                BigDecimal.ZERO
-        );
-        BigDecimal maxDiscountPercent = systemSettingService.getNumberSetting(
-                "discount.max_percent",
-                new BigDecimal("100")
-        );
-        boolean allowWithVoucher = systemSettingService.getBooleanSetting(
-                "discount.allow_with_voucher",
-                true
-        );
-
-        // ✅ Cấu hình BẬT/TẮT giảm giá mặc định
-        // - discount.use_default = true  → dùng defaultDiscountPercent như bình thường
-        // - discount.use_default = false → ép defaultDiscountPercent = 0 (coi như không giảm)
-        boolean useDefaultDiscount = systemSettingService.getBooleanSetting(
-                "discount.use_default",
-                true // mặc định = true để giữ hành vi cũ nếu chưa cấu hình
-        );
-        if (!useDefaultDiscount) {
-            // Nếu tắt giảm giá mặc định → ép % về 0
-            defaultDiscountPercent = BigDecimal.ZERO;
-        }
-
-        // Chuẩn hóa %: không âm, không vượt quá 100
-        if (defaultDiscountPercent.compareTo(BigDecimal.ZERO) < 0) {
-            defaultDiscountPercent = BigDecimal.ZERO;
-        }
-        if (defaultDiscountPercent.compareTo(new BigDecimal("100")) > 0) {
-            defaultDiscountPercent = new BigDecimal("100");
-        }
-        if (maxDiscountPercent.compareTo(BigDecimal.ZERO) < 0) {
-            maxDiscountPercent = BigDecimal.ZERO;
-        }
-        if (maxDiscountPercent.compareTo(new BigDecimal("100")) > 0) {
-            maxDiscountPercent = new BigDecimal("100");
-        }
-
-        // Tính giảm giá mặc định (nếu > 0)
-        BigDecimal defaultDiscountAmount = BigDecimal.ZERO;
-        boolean hasVoucher = (appliedVoucherCode != null);
-
-        if (defaultDiscountPercent.compareTo(BigDecimal.ZERO) > 0) {
-            // Nếu đã có voucher và không cho phép dùng kèm → bỏ qua default discount
-            if (!hasVoucher || allowWithVoucher) {
-                // Cơ sở tính giảm giá:
-                //  - Nếu đã có voucher → giảm trên số tiền còn lại sau voucher (expectedAmount)
-                //  - Nếu không có voucher → giảm trên tổng tiền order
-                BigDecimal baseForDefault = hasVoucher ? expectedAmount : orderTotal;
-
-                BigDecimal percent = defaultDiscountPercent
-                        .divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP);
-
-                defaultDiscountAmount = baseForDefault
-                        .multiply(percent)
-                        .setScale(0, RoundingMode.HALF_UP); // làm tròn về tiền VND
-
-                // Cập nhật expectedAmount sau khi trừ discount mặc định
-                expectedAmount = baseForDefault.subtract(defaultDiscountAmount);
-                if (expectedAmount.compareTo(BigDecimal.ZERO) < 0) {
-                    expectedAmount = BigDecimal.ZERO;
-                }
-
-                // Tổng discount = discount voucher + discount mặc định
-                discountAmount = discountAmount.add(defaultDiscountAmount);
-            }
-        }
-
-        // Áp dụng giới hạn giảm giá tối đa (max_percent) trên tổng tiền order
-        if (orderTotal.compareTo(BigDecimal.ZERO) > 0 && maxDiscountPercent.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal maxDiscountAmount = orderTotal
-                    .multiply(maxDiscountPercent)
-                    .divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP)
-                    .setScale(0, RoundingMode.HALF_UP);
-
-            if (discountAmount.compareTo(maxDiscountAmount) > 0) {
-                discountAmount = maxDiscountAmount;
-                expectedAmount = orderTotal.subtract(discountAmount);
-                if (expectedAmount.compareTo(BigDecimal.ZERO) < 0) {
-                    expectedAmount = BigDecimal.ZERO;
-                }
-            }
-        }
-
-        // -----------------------------------------------------------------
-        // 🚩 B3.1 – TÍNH VAT DỰA TRÊN CẤU HÌNH HỆ THỐNG (Module 20)
-        // -----------------------------------------------------------------
-
-        // expectedAmount hiện tại là: (tổng tiền - voucher - default discount)
-        // Ta sẽ tính VAT trên số tiền này
-        BigDecimal amountBeforeVat = expectedAmount;
-
-        if (amountBeforeVat == null) {
-            amountBeforeVat = BigDecimal.ZERO;
-        }
-
-        // Đọc VAT từ system setting (vd: 10 = 10%)
-        BigDecimal vatPercent = systemSettingService.getNumberSetting(
-                "vat.rate",
-                BigDecimal.ZERO
-        );
-
-        // Chuẩn hóa về [0, 100]
-        if (vatPercent.compareTo(BigDecimal.ZERO) < 0) vatPercent = BigDecimal.ZERO;
-        if (vatPercent.compareTo(new BigDecimal("100")) > 0) vatPercent = new BigDecimal("100");
-
-        BigDecimal vatAmount = BigDecimal.ZERO;
-
-        if (vatPercent.compareTo(BigDecimal.ZERO) > 0 && amountBeforeVat.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal vatDecimal = vatPercent
-                    .divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP);
-
-            vatAmount = amountBeforeVat
-                    .multiply(vatDecimal)
-                    .setScale(0, RoundingMode.HALF_UP); // làm tròn tiền Việt
-        }
-
-        // Cập nhật lại expectedAmount = amountBeforeVat + vatAmount
-        BigDecimal expectedAmountWithVat = amountBeforeVat.add(vatAmount);
-
-        // ===============================
-        // B3.2 – CHECK SỐ TIỀN FE GỬI LÊN
-        // ===============================
+        // Anti-cheat: số tiền FE gửi phải khớp với số tiền BE tính
         if (req.getAmount() == null || req.getAmount().compareTo(expectedAmountWithVat) != 0) {
             throw new RuntimeException("Số tiền thanh toán không khớp với số tiền cần thanh toán");
         }
 
-        // --------------------------------------------------------------
-        // 🎯 B3.3 – TÍNH ĐIỂM LOYALTY (nếu bật trong SystemSetting)
-        // --------------------------------------------------------------
-        boolean loyaltyEnabled = systemSettingService.getBooleanSetting(
-                "loyalty.enabled",
-                false
-        );
-
-        int loyaltyEarnedPoint = 0;
-
-        if (loyaltyEnabled) {
-            // Tỉ lệ tích điểm: số điểm trên mỗi 1.000đ
-            BigDecimal earnRate = systemSettingService.getNumberSetting(
-                    "loyalty.earn_rate",
-                    BigDecimal.ZERO
-            );
-
-            BigDecimal thousand = new BigDecimal("1000");
-
-            // Công thức: (số tiền cuối cùng phải trả / 1000) * earn_rate
-            BigDecimal point = expectedAmountWithVat
-                    .divide(thousand, 4, RoundingMode.DOWN)
-                    .multiply(earnRate);
-
-            loyaltyEarnedPoint = point.setScale(0, RoundingMode.DOWN).intValue();
-        }
+        // Lấy thông tin voucher + discount + loyalty từ calc
+        BigDecimal discountAmount = calc.getTotalDiscount() != null ? calc.getTotalDiscount() : BigDecimal.ZERO;
+        BigDecimal voucherDiscount = calc.getVoucherDiscount() != null ? calc.getVoucherDiscount() : BigDecimal.ZERO;
+        BigDecimal defaultDiscount = calc.getDefaultDiscount() != null ? calc.getDefaultDiscount() : BigDecimal.ZERO;
+        BigDecimal amountBeforeVat = calc.getAmountAfterDiscount() != null ? calc.getAmountAfterDiscount() : BigDecimal.ZERO;
+        BigDecimal vatPercent = calc.getVatPercent() != null ? calc.getVatPercent() : BigDecimal.ZERO;
+        BigDecimal vatAmount = calc.getVatAmount() != null ? calc.getVatAmount() : BigDecimal.ZERO;
+        String appliedVoucherCode = calc.getAppliedVoucherCode();
+        int loyaltyEarnedPoint = calc.getLoyaltyEarnedPoint() != null ? calc.getLoyaltyEarnedPoint() : 0;
 
         // B4: Lấy user
         User user = userRepository.findByUsername(username)
@@ -312,17 +151,26 @@ public class PaymentService {
         Invoice invoice = invoiceService.createInvoiceFromOrder(
                 order.getId(),
                 req.getMethod(),
-                appliedVoucherCode,   // có thể null nếu không dùng voucher
-                discountAmount,       // có thể 0 nếu không dùng voucher
-                loyaltyEarnedPoint    // ⭐ điểm tích lũy đã tính
+                appliedVoucherCode,                 // mã voucher thực tế
+                calc.getOrderTotal(),               // originalTotal
+                voucherDiscount,                    // voucherDiscount
+                defaultDiscount,                    // defaultDiscount
+                discountAmount,                     // tổng giảm
+                amountBeforeVat,                    // amountBeforeVat
+                vatPercent,                         // vatRate
+                vatAmount,                          // vatAmount
+                expectedAmountWithVat,              // finalAmount
+                loyaltyEarnedPoint,                 // điểm loyalty
+                customerPaid,                       // tiền khách trả
+                changeAmount                        // tiền thừa
         );
+
 
         // =====================================================================
         // 🟢 B7: TẠO PAYMENT (gắn invoice ngay lập tức)
         // =====================================================================
 
         // B7.1: Lấy và validate số tiền khách trả
-        BigDecimal customerPaid = req.getCustomerPaid();
         if (customerPaid == null) {
             throw new RuntimeException("Số tiền khách trả không hợp lệ");
         }
@@ -332,19 +180,13 @@ public class PaymentService {
             throw new RuntimeException("Số tiền khách trả không hợp lệ");
         }
 
-        // B7.2: Tính tiền thừa (customerPaid - số tiền phải thanh toán)
-        BigDecimal changeAmount = customerPaid.subtract(expectedAmountWithVat);
-        if (changeAmount.compareTo(BigDecimal.ZERO) < 0) {
-            changeAmount = BigDecimal.ZERO; // chốt lại để tránh âm (phòng trường hợp làm tròn)
-        }
-
-        // B7.3: Tạo Payment
+        // B7.2: Tạo Payment
         Payment payment = Payment.builder()
                 .order(order)
                 .invoice(invoice)
-                .amount(expectedAmountWithVat)   // số tiền phải thanh toán (sau giảm + VAT)
-                .customerPaid(customerPaid)      // số tiền khách đưa
-                .changeAmount(changeAmount)      // tiền thừa
+                .amount(expectedAmountWithVat)        // số tiền phải thanh toán
+                .customerPaid(customerPaid)           // số tiền khách trả
+                .changeAmount(changeAmount)           // tiền thừa
                 .method(req.getMethod())
                 .note(req.getNote())
                 .paidAt(LocalDateTime.now())
@@ -488,12 +330,32 @@ public class PaymentService {
             throw new RuntimeException("Order này đã thanh toán trước đó, không thể tính lại.");
         }
         if (order.getStatus() != OrderStatus.SERVING) {
-            throw new RuntimeException("Chỉ order đang phục vụ mới được tính số tiền thanh toán.");
+            throw new RuntimeException("Chỉ order đang SERVING mới được tính số tiền thanh toán.");
         }
 
-        // =====================================================================
-        // B3: Tính lại số tiền cần thanh toán (có xét đến voucher + discount mặc định)
-        // =====================================================================
+        // B3: Gọi hàm dùng chung
+        return calculateAmountForOrder(order, req.getVoucherCode());
+    }
+
+    // =====================================================================
+    // HÀM DÙNG CHUNG: TÍNH TOÁN SỐ TIỀN THANH TOÁN CHO 1 ORDER
+    // =====================================================================
+
+    /**
+     * Tính toàn bộ các giá trị tiền cho 1 order:
+     *  - Tổng gốc (orderTotal)
+     *  - Giảm voucher
+     *  - Giảm mặc định
+     *  - Tổng giảm
+     *  - VAT %
+     *  - VAT amount
+     *  - Final amount
+     *  - Mã voucher thực tế áp dụng
+     *  - Điểm loyalty nhận được
+     *
+     * Hàm này KHÔNG ghi DB, chỉ tính toán và trả về CalcPaymentResponse.
+     */
+    private CalcPaymentResponse calculateAmountForOrder(Order order, String voucherCodeInput) {
 
         // Mặc định: không dùng voucher
         BigDecimal discountAmount = BigDecimal.ZERO;      // Tổng số tiền giảm (voucher + default discount)
@@ -507,21 +369,16 @@ public class PaymentService {
         }
 
         // =======================
-        // B3.1: TÍNH VOUCHER
+        // 1) TÍNH VOUCHER
         // =======================
         BigDecimal voucherDiscount = BigDecimal.ZERO;
-        String voucherCode = req.getVoucherCode();
+        String voucherCode = voucherCodeInput;
 
         if (voucherCode != null && !voucherCode.trim().isEmpty()) {
-            // Nếu FE gửi voucherCode → gọi lại VoucherService để tính toán chính xác
             VoucherApplyRequest applyReq = new VoucherApplyRequest();
             applyReq.setOrderId(order.getId());
             applyReq.setVoucherCode(voucherCode.trim());
 
-            // Hàm này sẽ:
-            //  - Kiểm tra hiệu lực voucher
-            //  - Kiểm tra minOrderAmount, usageLimit
-            //  - Tính discountAmount & finalAmount (sau khi trừ voucher,  CHƯA VAT)
             VoucherApplyResponse applyRes = voucherService.applyVoucher(applyReq);
 
             voucherDiscount = applyRes.getDiscountAmount();
@@ -530,23 +387,16 @@ public class PaymentService {
             }
 
             discountAmount = voucherDiscount;
-            expectedAmount = applyRes.getFinalAmount(); // số tiền sau khi áp dụng voucher
+            expectedAmount = applyRes.getFinalAmount(); // sau voucher, chưa VAT
             appliedVoucherCode = applyRes.getVoucherCode();
         } else {
-            // Không dùng voucher → số tiền cần thanh toán trước khi áp dụng discount mặc định
             expectedAmount = orderTotal;
         }
 
-        // -----------------------------------------------------------------
-        // B3.2: TÍCH HỢP DISCOUNT TỪ SYSTEM SETTING (Module 20)
-        // -----------------------------------------------------------------
-        // Các cấu hình sử dụng:
-        //  - discount.default_percent      → % giảm mặc định
-        //  - discount.max_percent          → % giảm tối đa cho 1 hóa đơn
-        //  - discount.allow_with_voucher   → có cho phép giảm thêm khi đã dùng voucher hay không
-        // -----------------------------------------------------------------
+        // =======================
+        // 2) DISCOUNT MẶC ĐỊNH
+        // =======================
 
-        // Đọc cấu hình từ SystemSetting
         BigDecimal defaultDiscountPercent = systemSettingService.getNumberSetting(
                 "discount.default_percent",
                 BigDecimal.ZERO
@@ -559,8 +409,6 @@ public class PaymentService {
                 "discount.allow_with_voucher",
                 true
         );
-
-        // ✅ BẬT/TẮT giảm giá mặc định cho phần tính thử
         boolean useDefaultDiscount = systemSettingService.getBooleanSetting(
                 "discount.use_default",
                 true
@@ -569,30 +417,17 @@ public class PaymentService {
             defaultDiscountPercent = BigDecimal.ZERO;
         }
 
-        // Chuẩn hóa %: không âm, không vượt quá 100
-        if (defaultDiscountPercent.compareTo(BigDecimal.ZERO) < 0) {
-            defaultDiscountPercent = BigDecimal.ZERO;
-        }
-        if (defaultDiscountPercent.compareTo(new BigDecimal("100")) > 0) {
-            defaultDiscountPercent = new BigDecimal("100");
-        }
-        if (maxDiscountPercent.compareTo(BigDecimal.ZERO) < 0) {
-            maxDiscountPercent = BigDecimal.ZERO;
-        }
-        if (maxDiscountPercent.compareTo(new BigDecimal("100")) > 0) {
-            maxDiscountPercent = new BigDecimal("100");
-        }
+        // Chuẩn hóa %
+        if (defaultDiscountPercent.compareTo(BigDecimal.ZERO) < 0) defaultDiscountPercent = BigDecimal.ZERO;
+        if (defaultDiscountPercent.compareTo(new BigDecimal("100")) > 0) defaultDiscountPercent = new BigDecimal("100");
+        if (maxDiscountPercent.compareTo(BigDecimal.ZERO) < 0) maxDiscountPercent = BigDecimal.ZERO;
+        if (maxDiscountPercent.compareTo(new BigDecimal("100")) > 0) maxDiscountPercent = new BigDecimal("100");
 
-        // Tính giảm giá mặc định (nếu > 0)
         BigDecimal defaultDiscountAmount = BigDecimal.ZERO;
         boolean hasVoucher = (appliedVoucherCode != null);
 
         if (defaultDiscountPercent.compareTo(BigDecimal.ZERO) > 0) {
-            // Nếu đã có voucher và không cho phép dùng kèm → bỏ qua default discount
             if (!hasVoucher || allowWithVoucher) {
-                // Cơ sở tính giảm giá:
-                //  - Nếu đã có voucher → giảm trên số tiền còn lại sau voucher (expectedAmount)
-                //  - Nếu không có voucher → giảm trên tổng tiền order
                 BigDecimal baseForDefault = hasVoucher ? expectedAmount : orderTotal;
 
                 BigDecimal percent = defaultDiscountPercent
@@ -600,20 +435,18 @@ public class PaymentService {
 
                 defaultDiscountAmount = baseForDefault
                         .multiply(percent)
-                        .setScale(0, RoundingMode.HALF_UP); // làm tròn về tiền VND
+                        .setScale(0, RoundingMode.HALF_UP);
 
-                // Cập nhật expectedAmount sau khi trừ discount mặc định
                 expectedAmount = baseForDefault.subtract(defaultDiscountAmount);
                 if (expectedAmount.compareTo(BigDecimal.ZERO) < 0) {
                     expectedAmount = BigDecimal.ZERO;
                 }
 
-                // Tổng discount = discount voucher + discount mặc định
                 discountAmount = discountAmount.add(defaultDiscountAmount);
             }
         }
 
-        // Áp dụng giới hạn giảm giá tối đa (max_percent) trên tổng tiền order
+        // Giới hạn giảm giá tối đa
         if (orderTotal.compareTo(BigDecimal.ZERO) > 0 && maxDiscountPercent.compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal maxDiscountAmount = orderTotal
                     .multiply(maxDiscountPercent)
@@ -629,25 +462,16 @@ public class PaymentService {
             }
         }
 
-        // =====================================================================
-        // B4: TÍNH VAT DỰA TRÊN CẤU HÌNH HỆ THỐNG (Module 20)
-        // =====================================================================
+        // =======================
+        // 3) VAT
+        // =======================
 
-        // expectedAmount hiện tại là: (tổng tiền - voucher - default discount)
-        // Ta sẽ tính VAT trên số tiền này
-        BigDecimal amountBeforeVat = expectedAmount;
+        BigDecimal amountBeforeVat = expectedAmount != null ? expectedAmount : BigDecimal.ZERO;
 
-        if (amountBeforeVat == null) {
-            amountBeforeVat = BigDecimal.ZERO;
-        }
-
-        // Đọc VAT từ system setting (vd: 10 = 10%)
         BigDecimal vatPercent = systemSettingService.getNumberSetting(
                 "vat.rate",
                 BigDecimal.ZERO
         );
-
-        // Chuẩn hóa về [0, 100]
         if (vatPercent.compareTo(BigDecimal.ZERO) < 0) vatPercent = BigDecimal.ZERO;
         if (vatPercent.compareTo(new BigDecimal("100")) > 0) vatPercent = new BigDecimal("100");
 
@@ -659,35 +483,30 @@ public class PaymentService {
 
             vatAmount = amountBeforeVat
                     .multiply(vatDecimal)
-                    .setScale(0, RoundingMode.HALF_UP); // làm tròn tiền Việt
+                    .setScale(0, RoundingMode.HALF_UP);
         }
 
-        // Số tiền cuối cùng cần thanh toán
         BigDecimal finalAmount = amountBeforeVat.add(vatAmount);
 
-        // --------------------------------------------------------------
-        // 🎯 TÍNH ĐIỂM LOYALTY (Step 5 – chỉ tính, chưa lưu DB)
-        // --------------------------------------------------------------
+        // =======================
+        // 4) LOYALTY
+        // =======================
 
-        // Đọc cấu hình: loyalty có bật không?
         boolean loyaltyEnabled = systemSettingService.getBooleanSetting(
                 "loyalty.enabled",
-                false // mặc định KHÔNG bật
+                false
         );
 
-        // Nếu tắt → điểm nhận được = 0
         int loyaltyEarnedPoint = 0;
 
         if (loyaltyEnabled) {
-
-            // Tỉ lệ earn_rate: số điểm cho mỗi 1000đ
             BigDecimal earnRate = systemSettingService.getNumberSetting(
                     "loyalty.earn_rate",
                     BigDecimal.ZERO
             );
 
-            // Công thức: finalAmount / 1000 * earn_rate
             BigDecimal thousand = new BigDecimal("1000");
+
             BigDecimal point = finalAmount
                     .divide(thousand, 4, RoundingMode.DOWN)
                     .multiply(earnRate);
@@ -695,10 +514,7 @@ public class PaymentService {
             loyaltyEarnedPoint = point.setScale(0, RoundingMode.DOWN).intValue();
         }
 
-        // =====================================================================
-        // B5: Build response cho FE
-        // =====================================================================
-
+        // Build response
         return CalcPaymentResponse.builder()
                 .orderTotal(orderTotal)
                 .voucherDiscount(voucherDiscount)
@@ -708,9 +524,7 @@ public class PaymentService {
                 .vatPercent(vatPercent)
                 .vatAmount(vatAmount)
                 .finalAmount(finalAmount)
-                // ⭐ TRẢ VỀ MÃ VOUCHER
                 .appliedVoucherCode(appliedVoucherCode)
-                // ⭐ TRẢ VỀ ĐIỂM LOYALTY
                 .loyaltyEarnedPoint(loyaltyEarnedPoint)
                 .build();
     }

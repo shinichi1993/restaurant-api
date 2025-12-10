@@ -82,4 +82,8 @@ public class InvoiceExportData {
     // ============================================================
     private String voucherCode;             // Mã voucher nếu có
     private Integer loyaltyEarnedPoint;     // Điểm tích được
+
+    // 💰 Thông tin tiền khách trả (để in ra hóa đơn nếu cần)
+    private BigDecimal customerPaid;
+    private BigDecimal changeAmount;
 }

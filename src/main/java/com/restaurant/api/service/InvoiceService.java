@@ -47,81 +47,92 @@ public class InvoiceService {
     private final SystemSettingService systemSettingService;
     private final SystemSettingRepository systemSettingRepository;
 
-    // =====================================================================================
-    // 1) TẠO HÓA ĐƠN TỪ ORDER – CHUẨN PHASE 2
-    // =====================================================================================
+    /**
+     * 1) TẠO HÓA ĐƠN TỪ ORDER
+     * Tạo Invoice từ Order với đầy đủ snapshot tiền.
+     * ----------------------------------------------------------------------
+     * Toàn bộ logic tính toán (tổng tiền, giảm giá, VAT, loyalty, tiền khách trả)
+     * đã được xử lý tại PaymentService.
+     *
+     * Hàm này CHỈ nhận dữ liệu snapshot và lưu lại vào bảng invoice.
+     */
     @Transactional
     public Invoice createInvoiceFromOrder(Long orderId,
                                           PaymentMethod paymentMethod,
                                           String voucherCode,
+                                          BigDecimal originalTotal,
+                                          BigDecimal voucherDiscount,
+                                          BigDecimal defaultDiscount,
                                           BigDecimal discountAmount,
-                                          Integer loyaltyEarnedPoint) {
+                                          BigDecimal amountBeforeVat,
+                                          BigDecimal vatRate,
+                                          BigDecimal vatAmount,
+                                          BigDecimal finalAmount,
+                                          Integer loyaltyEarnedPoint,
+                                          BigDecimal customerPaid,
+                                          BigDecimal changeAmount) {
 
         // 1. Kiểm tra order tồn tại
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy đơn hàng"));
 
-        if (order.getStatus() != OrderStatus.SERVING) {
-            throw new RuntimeException("Chỉ tạo hóa đơn khi đơn hàng đang SERVING");
+        if (order.getStatus() != OrderStatus.SERVING && order.getStatus() != OrderStatus.PAID) {
+            // Sau khi refactor PaymentService, thường createInvoiceFromOrder được gọi
+            // ngay trước khi set Order sang PAID.
+            throw new RuntimeException("Chỉ tạo hóa đơn khi đơn hàng đang SERVING hoặc vừa thanh toán");
         }
 
-        // 2. Load danh sách OrderItem (giờ dùng findByOrder_Id)
+        // 2. Load danh sách OrderItem để snapshot InvoiceItem
         List<OrderItem> items = orderItemRepository.findByOrder_Id(orderId);
         if (items.isEmpty()) {
             throw new RuntimeException("Order không có món ăn");
         }
 
-        // 3. Tính tổng tiền theo snapshotPrice (Phase 2)
-        BigDecimal total = BigDecimal.ZERO;
+        // 3. Chuẩn hóa các giá trị tiền (tránh null, tránh âm)
+        originalTotal = defaultBigDecimal(originalTotal);
+        voucherDiscount = defaultBigDecimal(voucherDiscount);
+        defaultDiscount = defaultBigDecimal(defaultDiscount);
+        discountAmount = defaultBigDecimal(discountAmount);
+        amountBeforeVat = defaultBigDecimal(amountBeforeVat);
+        vatRate = vatRate == null ? BigDecimal.ZERO : vatRate;
+        vatAmount = defaultBigDecimal(vatAmount);
+        finalAmount = defaultBigDecimal(finalAmount);
+        customerPaid = customerPaid; // có thể null (hóa đơn cũ)
+        changeAmount = changeAmount; // có thể null (hóa đơn cũ)
 
-        for (OrderItem oi : items) {
-            Dish dish = oi.getDish();
-            if (dish == null) continue;
-
-            BigDecimal price = oi.getSnapshotPrice() != null
-                    ? oi.getSnapshotPrice()
-                    : dish.getPrice();
-
-            total = total.add(price.multiply(BigDecimal.valueOf(oi.getQuantity())));
+        // Đảm bảo không âm & discount không vượt quá originalTotal
+        if (discountAmount.compareTo(originalTotal) > 0) {
+            discountAmount = originalTotal;
+        }
+        if (amountBeforeVat.compareTo(BigDecimal.ZERO) < 0) {
+            amountBeforeVat = BigDecimal.ZERO;
         }
 
-        // ---- XỬ LÝ DISCOUNT + VAT (giữ nguyên logic cũ, không sửa ở bước này) ----
-        if (discountAmount == null) discountAmount = BigDecimal.ZERO;
-        if (discountAmount.compareTo(BigDecimal.ZERO) < 0) discountAmount = BigDecimal.ZERO;
-        if (discountAmount.compareTo(total) > 0) discountAmount = total;
-
-        BigDecimal baseAmount = total.subtract(discountAmount);
-        if (baseAmount.compareTo(BigDecimal.ZERO) < 0) baseAmount = BigDecimal.ZERO;
-
-        BigDecimal vatPercent = systemSettingService.getNumberSetting("vat.rate", BigDecimal.ZERO);
-        vatPercent = vatPercent.max(BigDecimal.ZERO).min(new BigDecimal("100"));
-
-        BigDecimal vatAmount = BigDecimal.ZERO;
-        if (vatPercent.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal vatRate = vatPercent.divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP);
-            vatAmount = baseAmount.multiply(vatRate).setScale(0, RoundingMode.HALF_UP);
-        }
-
-        BigDecimal finalAmount = baseAmount.add(vatAmount);
-
-        // 4. Tạo Invoice
+        // 4. Tạo Invoice với snapshot tiền
         Invoice invoice = Invoice.builder()
                 .orderId(orderId)
                 .paymentMethod(paymentMethod != null ? paymentMethod.name() : null)
-                .totalAmount(finalAmount)
-                .discountAmount(discountAmount)
                 .voucherCode(voucherCode)
+                .originalTotalAmount(originalTotal)
+                .voucherDiscountAmount(voucherDiscount)
+                .defaultDiscountAmount(defaultDiscount)
+                .discountAmount(discountAmount)
+                .amountBeforeVat(amountBeforeVat)
+                .vatRate(vatRate)
+                .vatAmount(vatAmount)
+                .totalAmount(finalAmount) // finalAmount = tiền cuối cùng cần thanh toán
                 .loyaltyEarnedPoint(loyaltyEarnedPoint != null ? loyaltyEarnedPoint : 0)
+                .customerPaid(customerPaid)
+                .changeAmount(changeAmount)
                 .paidAt(LocalDateTime.now())
                 .build();
 
         invoiceRepository.save(invoice);
 
-        // 5. Tạo InvoiceItem (snapshot)
+        // 5. Tạo InvoiceItem (snapshot món ăn)
         List<InvoiceItem> invoiceItems = new ArrayList<>();
 
         for (OrderItem oi : items) {
-
             Dish dish = oi.getDish();
             if (dish == null) continue;
 
@@ -143,7 +154,7 @@ public class InvoiceService {
 
         invoiceItemRepository.saveAll(invoiceItems);
 
-        // Log
+        // 6. Audit log
         auditLogService.log(
                 AuditAction.INVOICE_CREATE,
                 "invoice",
@@ -198,31 +209,33 @@ public class InvoiceService {
                         .build())
                 .toList();
 
-        // Tính phần tiền
-        BigDecimal totalBeforeDiscount = itemResponses.stream()
-                .map(InvoiceItemResponse::getSubtotal)
+        // Tính tổng trước giảm từ item (dùng để fallback nếu thiếu snapshot)
+        BigDecimal totalFromItems = items.stream()
+                .map(InvoiceItem::getSubtotal)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // Ưu tiên dùng snapshot từ Invoice, nếu null thì fallback từ item
+        BigDecimal originalTotal = invoice.getOriginalTotalAmount() != null
+                ? invoice.getOriginalTotalAmount()
+                : totalFromItems;
 
         BigDecimal discountAmount = Optional.ofNullable(invoice.getDiscountAmount())
                 .orElse(BigDecimal.ZERO);
 
-        discountAmount = discountAmount.max(BigDecimal.ZERO).min(totalBeforeDiscount);
+        BigDecimal voucherDiscount = Optional.ofNullable(invoice.getVoucherDiscountAmount())
+                .orElse(BigDecimal.ZERO);
 
-        BigDecimal amountBeforeVat = totalBeforeDiscount.subtract(discountAmount);
+        BigDecimal defaultDiscount = Optional.ofNullable(invoice.getDefaultDiscountAmount())
+                .orElse(BigDecimal.ZERO);
 
-        BigDecimal vatPercent = systemSettingService.getNumberSetting("vat.rate", BigDecimal.ZERO)
-                .max(BigDecimal.ZERO)
-                .min(new BigDecimal("100"));
+        BigDecimal amountBeforeVat = Optional.ofNullable(invoice.getAmountBeforeVat())
+                .orElse(originalTotal.subtract(discountAmount));
 
-        BigDecimal vatAmount = BigDecimal.ZERO;
+        BigDecimal vatPercent = Optional.ofNullable(invoice.getVatRate())
+                .orElse(BigDecimal.ZERO);
 
-        if (amountBeforeVat.compareTo(BigDecimal.ZERO) > 0 &&
-                vatPercent.compareTo(BigDecimal.ZERO) > 0) {
-
-            vatAmount = amountBeforeVat
-                    .multiply(vatPercent.divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP))
-                    .setScale(0, RoundingMode.HALF_UP);
-        }
+        BigDecimal vatAmount = Optional.ofNullable(invoice.getVatAmount())
+                .orElse(BigDecimal.ZERO);
 
         return InvoiceResponse.builder()
                 .id(invoice.getId())
@@ -231,15 +244,20 @@ public class InvoiceService {
                 .paidAt(invoice.getPaidAt())
                 .totalAmount(invoice.getTotalAmount())
                 .discountAmount(discountAmount)
+                .voucherCode(invoice.getVoucherCode())
                 .amountBeforeVat(amountBeforeVat)
                 .vatPercent(vatPercent)
                 .vatAmount(vatAmount)
-                .voucherCode(invoice.getVoucherCode())
+                .originalTotalAmount(originalTotal)
+                .voucherDiscountAmount(voucherDiscount)
+                .defaultDiscountAmount(defaultDiscount)
                 .loyaltyEarnedPoint(
                         invoice.getLoyaltyEarnedPoint() != null
                                 ? invoice.getLoyaltyEarnedPoint()
                                 : 0
                 )
+                .customerPaid(invoice.getCustomerPaid())
+                .changeAmount(invoice.getChangeAmount())
                 .createdAt(invoice.getCreatedAt())
                 .updatedAt(invoice.getUpdatedAt())
                 .items(itemResponses)
@@ -277,33 +295,29 @@ public class InvoiceService {
         String restaurantTaxId = getSetting("restaurant.tax_id");
 
         // Tính tiền xuất PDF
-        BigDecimal totalBeforeDiscount = itemDTOs.stream()
-                .map(InvoiceExportData.Item::getSubtotal)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // Ưu tiên dùng snapshot từ Invoice
+        BigDecimal originalTotal = Optional.ofNullable(invoice.getOriginalTotalAmount())
+                .orElse(
+                        invoiceItems.stream()
+                                .map(InvoiceItem::getSubtotal)
+                                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                );
 
         BigDecimal discountAmount = Optional.ofNullable(invoice.getDiscountAmount())
                 .orElse(BigDecimal.ZERO);
 
-        discountAmount = discountAmount.max(BigDecimal.ZERO).min(totalBeforeDiscount);
+        BigDecimal amountBeforeVat = Optional.ofNullable(invoice.getAmountBeforeVat())
+                .orElse(originalTotal.subtract(discountAmount));
 
-        BigDecimal amountBeforeVat = totalBeforeDiscount.subtract(discountAmount);
+        BigDecimal vatPercent = Optional.ofNullable(invoice.getVatRate())
+                .orElse(BigDecimal.ZERO);
 
-        BigDecimal vatPercent = systemSettingService.getNumberSetting(
-                "vat.rate",
-                BigDecimal.ZERO
-        ).max(BigDecimal.ZERO).min(new BigDecimal("100"));
+        BigDecimal vatAmount = Optional.ofNullable(invoice.getVatAmount())
+                .orElse(BigDecimal.ZERO);
 
-        BigDecimal vatAmount = BigDecimal.ZERO;
+        BigDecimal finalAmount = Optional.ofNullable(invoice.getTotalAmount())
+                .orElse(amountBeforeVat.add(vatAmount));
 
-        if (amountBeforeVat.compareTo(BigDecimal.ZERO) > 0 &&
-                vatPercent.compareTo(BigDecimal.ZERO) > 0) {
-
-            vatAmount = amountBeforeVat.multiply(
-                    vatPercent.divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP)
-            ).setScale(0, RoundingMode.HALF_UP);
-        }
-
-        BigDecimal finalAmount = amountBeforeVat.add(vatAmount);
 
         return InvoiceExportData.builder()
                 .restaurantName(restaurantName)
@@ -315,7 +329,7 @@ public class InvoiceService {
                 .paidAt(invoice.getPaidAt())
                 .paymentMethod(invoice.getPaymentMethod())
                 .items(itemDTOs)
-                .totalBeforeDiscount(totalBeforeDiscount)
+                .totalBeforeDiscount(originalTotal)
                 .discountAmount(discountAmount)
                 .amountBeforeVat(amountBeforeVat)
                 .vatPercent(vatPercent)
@@ -327,6 +341,8 @@ public class InvoiceService {
                                 ? invoice.getLoyaltyEarnedPoint()
                                 : 0
                 )
+                .customerPaid(invoice.getCustomerPaid())
+                .changeAmount(invoice.getChangeAmount())
                 .build();
     }
 
@@ -334,5 +350,12 @@ public class InvoiceService {
         return systemSettingRepository.findBySettingKey(key)
                 .map(SystemSetting::getSettingValue)
                 .orElse("");
+    }
+
+    /**
+     * Hàm tiện ích: nếu null → trả về 0.
+     */
+    private BigDecimal defaultBigDecimal(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
     }
 }

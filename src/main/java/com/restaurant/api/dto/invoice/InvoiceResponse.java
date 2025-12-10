@@ -57,6 +57,33 @@ public class InvoiceResponse {
     private BigDecimal discountAmount;
 
     /**
+     * Tổng tiền gốc (trước giảm giá).
+     * - Snapshot từ Invoice.originalTotalAmount
+     * - Dùng cho hiển thị "Tổng gốc" trên FE.
+     */
+    private BigDecimal originalTotalAmount;
+
+    /**
+     * Số tiền giảm do voucher.
+     */
+    private BigDecimal voucherDiscountAmount;
+
+    /**
+     * Số tiền giảm do discount mặc định.
+     */
+    private BigDecimal defaultDiscountAmount;
+
+    /**
+     * Tiền khách trả thực tế cho hóa đơn.
+     */
+    private BigDecimal customerPaid;
+
+    /**
+     * Tiền thừa trả lại khách.
+     */
+    private BigDecimal changeAmount;
+
+    /**
      * voucherCode – Mã voucher đã áp dụng (nếu có).
      */
     private String voucherCode;
