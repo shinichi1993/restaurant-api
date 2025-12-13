@@ -47,6 +47,8 @@ public class CalcPaymentResponse {
      */
     private BigDecimal totalDiscount;
 
+    private BigDecimal amountBeforeRedeem;
+
     /**
      * Số tiền sau khi trừ toàn bộ giảm giá, chưa cộng VAT.
      */
@@ -75,4 +77,14 @@ public class CalcPaymentResponse {
     // -------------------------------------------------
     private String appliedVoucherCode;
     private Integer loyaltyEarnedPoint; // Điểm nhận được từ hóa đơn
+
+    /**
+     * Số tiền giảm từ việc dùng điểm hội viên.
+     */
+    private BigDecimal redeemDiscount;
+
+    /**
+     * Số điểm hội viên đã dùng (preview).
+     */
+    private Integer redeemedPoint;
 }

@@ -38,6 +38,17 @@ public class PaymentRequest {
     private String note; // Ghi chú (optional)
 
     /**
+     * memberId – ID hội viên được chọn khi thanh toán
+     * ------------------------------------------------------------
+     * - FE gửi lên khi người dùng nhập SĐT hội viên ở PaymentModal
+     * - Có thể null nếu đơn không gắn hội viên
+     * - Dùng để:
+     *     + Gán memberId vào Order
+     *     + Cộng điểm loyalty sau khi thanh toán
+     */
+    private Long memberId;
+
+    /**
      * voucherCode – Mã voucher mà người dùng áp dụng cho đơn hàng.
      * ------------------------------------------------------------
      * - Có thể null nếu đơn không dùng voucher.
@@ -47,5 +58,12 @@ public class PaymentRequest {
 
     @NotNull(message = "Số tiền khách trả không được để trống")
     private BigDecimal customerPaid;
+
+    /**
+     * Số điểm hội viên muốn dùng để giảm giá.
+     * - FE gửi lên
+     * - Có thể null hoặc 0 nếu không dùng
+     */
+    private Integer redeemPoint;
 
 }

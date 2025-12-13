@@ -53,6 +53,17 @@ public class Order {
     @Column(name = "created_by")
     private Long createdBy;
 
+    /**
+     * ID hội viên gắn với order (nếu có).
+     * ------------------------------------------------------------
+     * - Dùng để tính điểm Loyalty cho hóa đơn này.
+     * - Không dùng @ManyToOne để tránh join nặng.
+     * - FE sẽ gửi memberId khi chọn khách hàng trên màn Order.
+     */
+    @Column(name = "member_id")
+    private Long memberId;
+
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt; // Thời gian tạo
 

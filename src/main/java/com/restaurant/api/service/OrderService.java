@@ -659,6 +659,7 @@ public class OrderService {
         // ❗ Cập nhật lại totalPrice — luôn đúng, không cần FE tính lại
         return OrderResponse.builder()
                 .id(order.getId())
+                .memberId(order.getMemberId())
                 .orderCode(order.getOrderCode())
                 .totalPrice(total)
                 .status(order.getStatus())

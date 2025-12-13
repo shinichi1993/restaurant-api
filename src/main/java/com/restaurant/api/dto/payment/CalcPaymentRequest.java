@@ -32,4 +32,22 @@ public class CalcPaymentRequest {
      * Nếu không dùng voucher → FE có thể gửi null hoặc "".
      */
     private String voucherCode;
+
+    /**
+     * memberId – ID hội viên (optional)
+     * --------------------------------------------------------
+     * - FE gửi lên khi user chọn hội viên tại PaymentModal.
+     * - Dùng để BE tính loyaltyEarnedPoint và redeem point chính xác.
+     */
+    private Long memberId;
+
+    /**
+     * redeemPoint – Số điểm hội viên muốn dùng (optional)
+     * --------------------------------------------------------
+     * - FE gửi lên khi user muốn dùng điểm để giảm tiền.
+     * - Nếu không dùng điểm → null hoặc 0.
+     */
+    private Integer redeemPoint;
+
+
 }

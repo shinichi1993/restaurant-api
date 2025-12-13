@@ -117,7 +117,7 @@ public class SecurityConfig {
                 "http://localhost:5173"));
 
         // Các method FE sẽ dùng
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
 
         // Các header được phép gửi kèm (quan trọng: Authorization)
         config.setAllowedHeaders(List.of("Authorization", "Content-Type"));

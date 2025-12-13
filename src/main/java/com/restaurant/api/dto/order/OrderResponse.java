@@ -26,6 +26,8 @@ import java.util.List;
 public class OrderResponse {
 
     private Long id;              // ID order
+    private Long memberId;
+
     private String orderCode;     // Mã order
 
     private BigDecimal totalPrice; // Tổng tiền
