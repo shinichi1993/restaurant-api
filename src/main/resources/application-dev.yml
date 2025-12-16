@@ -27,3 +27,8 @@ logging:
     root: INFO
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql: TRACE
+
+jwt:
+  secret: restaurant-dev-secret-key-1234567890123456sdadsaqweqweqweqweqwewadsdsfdqwefdggdfsdasdsadwqeqweqwewqeadsasdsadasdasdqweqweqweqwewa
+  access-token-expiration-minutes: 60
+  refresh-token-expiration-days: 7

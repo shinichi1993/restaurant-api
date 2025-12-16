@@ -1,6 +1,5 @@
 package com.restaurant.api.entity;
 
-import com.restaurant.api.enums.UserRole;
 import com.restaurant.api.enums.UserStatus;
 import jakarta.persistence.*;
 import lombok.*;
@@ -31,10 +30,6 @@ public class User {
 
     @Column(nullable = false, length = 150)
     private String fullName; // Họ tên hiển thị
-
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 20)
-    private UserRole role; // Vai trò (ADMIN / STAFF)
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)

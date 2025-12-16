@@ -2,6 +2,7 @@ package com.restaurant.api.security.filter;
 
 import com.restaurant.api.entity.User;
 import com.restaurant.api.repository.UserRepository;
+import com.restaurant.api.security.UserDetailsServiceImpl;
 import com.restaurant.api.service.JwtService;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
@@ -9,6 +10,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -24,6 +26,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
     private final UserRepository userRepository;
+    private final UserDetailsServiceImpl userDetailsService;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -53,17 +56,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             User user = userRepository.findByUsername(username).orElse(null);
 
             if (user != null && jwtService.isTokenValid(jwt, user)) {
+
+                UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+
                 UsernamePasswordAuthenticationToken authToken =
                         new UsernamePasswordAuthenticationToken(
-                                username,
+                                userDetails,
                                 null,
-                                // Authorities sẽ được load lại từ UserDetailsService nếu cần
-                                null
+                                userDetails.getAuthorities()
                         );
-                authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
 
+                authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                 SecurityContextHolder.getContext().setAuthentication(authToken);
             }
+
         }
 
         filterChain.doFilter(request, response);

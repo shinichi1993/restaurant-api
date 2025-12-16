@@ -6,6 +6,7 @@ import com.restaurant.api.service.DishService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -44,6 +45,7 @@ public class DishController {
      *  - Trang quản lý món ăn (DishPage)
      *  - Các module khác cần danh sách món (Order, Recipe...)
      */
+    @PreAuthorize("hasAuthority('DISH_VIEW')")
     @GetMapping
     public ResponseEntity<List<DishResponse>> getAll() {
         return ResponseEntity.ok(dishService.getAll());
@@ -61,6 +63,7 @@ public class DishController {
      *
      * @param categoryId ID danh mục món ăn
      */
+    @PreAuthorize("hasAuthority('DISH_VIEW')")
     @GetMapping("/by-category/{categoryId}")
     public ResponseEntity<List<DishResponse>> getByCategory(
             @PathVariable Long categoryId
@@ -78,6 +81,7 @@ public class DishController {
      *  - Body làm theo DishRequest
      *  - Có validate @Valid (Rule 26)
      */
+    @PreAuthorize("hasAuthority('DISH_CREATE')")
     @PostMapping
     public ResponseEntity<DishResponse> create(
             @Valid @RequestBody DishRequest req
@@ -95,6 +99,7 @@ public class DishController {
      * @param id  ID món ăn cần sửa
      * @param req Dữ liệu cập nhật (DishRequest)
      */
+    @PreAuthorize("hasAuthority('DISH_EDIT')")
     @PutMapping("/{id}")
     public ResponseEntity<DishResponse> update(
             @PathVariable Long id,
@@ -116,6 +121,7 @@ public class DishController {
      * Lý do:
      *  - Đảm bảo các Order / Invoice cũ vẫn tham chiếu được món này.
      */
+    @PreAuthorize("hasAuthority('DISH_DELETE')")
     @DeleteMapping("/{id}")
     public ResponseEntity<String> delete(@PathVariable Long id) {
         dishService.delete(id);

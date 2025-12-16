@@ -3,9 +3,9 @@ package com.restaurant.api.service;
 import com.restaurant.api.dto.user.*;
 import com.restaurant.api.entity.User;
 import com.restaurant.api.enums.AuditAction;
-import com.restaurant.api.enums.UserRole;
 import com.restaurant.api.enums.UserStatus;
 import com.restaurant.api.repository.UserRepository;
+import com.restaurant.api.repository.UserRoleRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -35,6 +35,7 @@ public class UserService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final AuditLogService auditLogService;
+    private final UserRoleRepository userRoleRepository;
 
     /**
      * Lấy toàn bộ người dùng trong hệ thống.
@@ -78,16 +79,10 @@ public class UserService {
             throw new RuntimeException("Tên đăng nhập đã tồn tại");
         }
 
-        // Chuyển đổi role từ String → Enum (nếu request dùng String)
-        UserRole role = req.getRole() != null
-                ? UserRole.valueOf(req.getRole())
-                : UserRole.STAFF;
-
         User user = User.builder()
                 .username(req.getUsername())
                 .password(passwordEncoder.encode(req.getPassword()))
                 .fullName(req.getFullName())
-                .role(role)
                 .status(UserStatus.ACTIVE)
                 .build();
 
@@ -114,11 +109,6 @@ public class UserService {
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy người dùng"));
 
         user.setFullName(req.getFullName());
-
-        // Chuyển đổi role từ request → Enum
-        if (req.getRole() != null) {
-            user.setRole(UserRole.valueOf(req.getRole()));
-        }
 
         // Chuyển đổi status từ request → Enum
         if (req.getStatus() != null) {
@@ -181,12 +171,18 @@ public class UserService {
      * Dùng ở tất cả API trả dữ liệu người dùng.
      */
     public UserResponse toUserResponse(User user) {
+        // 🔹 Lấy danh sách role code của user
+        List<String> roleCodes = userRoleRepository.findByUser(user)
+                .stream()
+                .map(ur -> ur.getRole().getCode())
+                .toList();
+
         return UserResponse.builder()
                 .id(user.getId())
                 .username(user.getUsername())
                 .fullName(user.getFullName())
-                .role(user.getRole())
                 .status(user.getStatus())
+                .roles(roleCodes) // ✅ ROLE THẬT
                 .createdAt(user.getCreatedAt())
                 .updatedAt(user.getUpdatedAt())
                 .build();

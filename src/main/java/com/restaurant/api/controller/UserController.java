@@ -1,9 +1,11 @@
 package com.restaurant.api.controller;
 
 import com.restaurant.api.dto.user.*;
+import com.restaurant.api.service.UserRoleService;
 import com.restaurant.api.service.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.validation.Valid;
@@ -20,6 +22,7 @@ import java.util.List;
 public class UserController {
 
     private final UserService userService;
+    private final UserRoleService userRoleService;
 
     /**
      * API lấy danh sách user
@@ -88,5 +91,29 @@ public class UserController {
     ) {
         userService.changePassword(principal.getName(), req);
         return ResponseEntity.ok("Đổi mật khẩu thành công");
+    }
+
+    /**
+     * API lấy danh sách role của 1 user
+     * - ADMIN dùng để mở modal phân quyền
+     */
+    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    @GetMapping("/{id}/roles")
+    public ResponseEntity<UserRolesResponse> getUserRoles(@PathVariable Long id) {
+        return ResponseEntity.ok(userRoleService.getRolesOfUser(id));
+    }
+
+    /**
+     * API cập nhật danh sách role cho 1 user
+     * - actor lấy từ Principal để chặn tự gỡ ADMIN
+     */
+    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    @PutMapping("/{id}/roles")
+    public ResponseEntity<UserRolesResponse> updateUserRoles(
+            Principal principal,
+            @PathVariable Long id,
+            @Valid @RequestBody UpdateUserRolesRequest req
+    ) {
+        return ResponseEntity.ok(userRoleService.updateRolesOfUser(principal.getName(), id, req));
     }
 }

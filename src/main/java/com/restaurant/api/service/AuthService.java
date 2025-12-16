@@ -2,17 +2,21 @@ package com.restaurant.api.service;
 
 import com.restaurant.api.dto.auth.*;
 import com.restaurant.api.entity.RefreshToken;
+import com.restaurant.api.entity.Role;
 import com.restaurant.api.entity.User;
-import com.restaurant.api.enums.UserRole;
+import com.restaurant.api.entity.UserRole;
 import com.restaurant.api.enums.UserStatus;
 import com.restaurant.api.repository.RefreshTokenRepository;
+import com.restaurant.api.repository.RoleRepository;
 import com.restaurant.api.repository.UserRepository;
+import com.restaurant.api.repository.UserRoleRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.*;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * AuthService
@@ -35,6 +39,9 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final PermissionQueryService permissionQueryService;
+    private final RoleRepository roleRepository;
+    private final UserRoleRepository userRoleRepository;
 
     /**
      * Đăng nhập hệ thống:
@@ -66,9 +73,13 @@ public class AuthService {
         // Lưu refresh token vào DB
         saveUserRefreshToken(user, refreshToken);
 
+        List<String> permissions = permissionQueryService.getPermissionCodesByUsername(user.getUsername());
+
         return LoginResponse.builder()
                 .accessToken(accessToken)
                 .refreshToken(refreshToken)
+                .tokenType("Bearer")
+                .permissions(permissions)
                 .build();
     }
 
@@ -83,19 +94,30 @@ public class AuthService {
         if (userRepository.findByUsername(req.getUsername()).isPresent()) {
             throw new RuntimeException("Tên đăng nhập đã tồn tại");
         }
-
-        // Role trong RegisterRequest đã là Enum → không cần convert
-        UserRole role = req.getRole() != null ? UserRole.valueOf(req.getRole()) : UserRole.STAFF;
-
+        // 1. Tạo user (KHÔNG set role)
         User user = User.builder()
                 .username(req.getUsername())
                 .password(passwordEncoder.encode(req.getPassword()))
                 .fullName(req.getFullName())
-                .role(role)                 // CHUẨN ENUM
-                .status(UserStatus.ACTIVE)  // CHUẨN ENUM
+                .status(UserStatus.ACTIVE)
                 .build();
 
         userRepository.save(user);
+
+        // 2. Gán role mặc định qua bảng user_role (Option A)
+        String roleCode = (req.getRole() != null && !req.getRole().isBlank())
+                ? req.getRole()
+                : "STAFF";
+
+        Role role = roleRepository.findByCode(roleCode)
+                .orElseThrow(() -> new RuntimeException("Role không tồn tại: " + roleCode));
+
+        UserRole userRole = UserRole.builder()
+                .user(user)
+                .role(role)
+                .build();
+
+        userRoleRepository.save(userRole);
     }
 
     /**
