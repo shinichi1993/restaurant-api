@@ -2,8 +2,10 @@ package com.restaurant.api.spec;
 
 import com.restaurant.api.entity.AuditLog;
 import com.restaurant.api.enums.AuditAction;
+import jakarta.persistence.criteria.JoinType;
 import org.springframework.data.jpa.domain.Specification;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 public class AuditLogSpecification {
@@ -33,6 +35,27 @@ public class AuditLogSpecification {
         return (root, query, cb) -> {
             if (actions == null || actions.isEmpty()) return cb.conjunction();
             return root.get("action").in(actions);
+        };
+    }
+
+    public static Specification<AuditLog> createdAtBetween(LocalDateTime from, LocalDateTime to) {
+        return (root, query, cb) -> {
+            if (from == null && to == null) return null;
+            if (from != null && to != null) return cb.between(root.get("createdAt"), from, to);
+            if (from != null) return cb.greaterThanOrEqualTo(root.get("createdAt"), from);
+            return cb.lessThanOrEqualTo(root.get("createdAt"), to);
+        };
+    }
+
+    public static Specification<AuditLog> hasUsername(String username) {
+        return (root, query, cb) -> {
+            if (username == null || username.isBlank()) {
+                return cb.conjunction();
+            }
+            return cb.like(
+                    cb.lower(root.join("user", JoinType.LEFT).get("username")),
+                    "%" + username.toLowerCase() + "%"
+            );
         };
     }
 }

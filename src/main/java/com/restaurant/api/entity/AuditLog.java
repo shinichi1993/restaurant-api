@@ -62,6 +62,18 @@ public class AuditLog {
     private Long entityId;
 
     /**
+     * IP client (lấy từ request)
+     */
+    @Column(name = "ip_address")
+    private String ipAddress;
+
+    /**
+     * User-Agent (lấy từ request)
+     */
+    @Column(name = "user_agent", columnDefinition = "TEXT")
+    private String userAgent;
+
+    /**
      * Dữ liệu trước khi thay đổi (JSON)
      */
     private String beforeData;

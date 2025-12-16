@@ -11,6 +11,7 @@ import com.restaurant.api.repository.UserRepository;
 import com.restaurant.api.util.AuthUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import jakarta.servlet.http.HttpServletRequest;
 
 import com.restaurant.api.dto.audit.AuditLogResponse;
 import com.restaurant.api.spec.AuditLogSpecification;
@@ -34,6 +35,7 @@ public class AuditLogService {
 
     private final AuditLogRepository auditLogRepository;
     private final UserRepository userRepository;
+    private final HttpServletRequest request;
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .findAndRegisterModules()
@@ -76,6 +78,8 @@ public class AuditLogService {
                     .entityId(entityId)
                     .beforeData(convertToJson(beforeData))   // ← STRING
                     .afterData(convertToJson(afterData))     // ← STRING
+                    .ipAddress(getClientIp())   // ✅ ADD
+                    .userAgent(getUserAgent())  // ✅ ADD
                     .createdAt(LocalDateTime.now())
                     .build();
 
@@ -91,8 +95,10 @@ public class AuditLogService {
      */
     public Page<AuditLogResponse> searchAuditLogs(
             String entity,
-            Long userId,
+            String username,
             List<AuditAction> actions,
+            LocalDateTime fromDate,   // ✅ ADD
+            LocalDateTime toDate,     // ✅ ADD
             int page,
             int size
     ) {
@@ -101,8 +107,9 @@ public class AuditLogService {
 
         Specification<AuditLog> spec =
                 Specification.where(AuditLogSpecification.hasEntity(entity))
-                        .and(AuditLogSpecification.hasUserId(userId))
-                        .and(AuditLogSpecification.hasActions(actions));
+                        .and(AuditLogSpecification.hasUsername(username))
+                        .and(AuditLogSpecification.hasActions(actions))
+                        .and(AuditLogSpecification.createdAtBetween(fromDate, toDate)); // ✅ ADD;
 
         Page<AuditLog> result = auditLogRepository.findAll(spec, pageable);
 
@@ -118,4 +125,32 @@ public class AuditLogService {
                 .createdAt(log.getCreatedAt())
                 .build());
     }
+
+    //===========HELPER================
+    /**
+     * Lấy IP của client an toàn (ưu tiên X-Forwarded-For)
+     */
+    private String getClientIp() {
+        try {
+            String xff = request.getHeader("X-Forwarded-For");
+            if (xff != null && !xff.isBlank()) {
+                return xff.split(",")[0].trim();
+            }
+            return request.getRemoteAddr();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Lấy User-Agent của client
+     */
+    private String getUserAgent() {
+        try {
+            return request.getHeader("User-Agent");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
 }
