@@ -46,5 +46,9 @@ public enum AuditAction {
 
     // Invoice & Payment
     INVOICE_CREATE,
-    PAYMENT_CREATE
+    PAYMENT_CREATE,
+
+    // Backup
+    BACKUP_CREATE,
+    BACKUP_RESTORE
 }

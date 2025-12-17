@@ -61,4 +61,25 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
      *  - Nếu 1 bàn chỉ được phép có 1 order đang mở → dùng hàm này là đủ
      */
     Optional<Order> findByTableIdAndStatus(Long tableId, OrderStatus status);
+
+    /**
+     * Kiểm tra xem trong hệ thống hiện tại có tồn tại
+     * đơn hàng nào đang ở các trạng thái CHƯA KẾT THÚC hay không.
+     *
+     * Mục đích sử dụng:
+     * ----------------------------------------------------------
+     * - Dùng trong Phase 4.4 – Backup / Restore Database
+     * - Chặn thao tác RESTORE khi:
+     *      + Vẫn còn Order đang mở
+     *      + Tránh mất dữ liệu order đang phục vụ khách
+     *
+     * Ví dụ sử dụng:
+     * ----------------------------------------------------------
+     * existsByStatusIn(List.of(NEW, SERVING))
+     *
+     * @param statuses danh sách trạng thái cần kiểm tra
+     * @return true  - nếu tồn tại ít nhất 1 order có trạng thái nằm trong danh sách
+     *         false - nếu KHÔNG có order nào thỏa điều kiện
+     */
+    boolean existsByStatusIn(List<OrderStatus> statuses);
 }
