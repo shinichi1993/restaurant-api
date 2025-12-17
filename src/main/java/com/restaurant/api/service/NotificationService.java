@@ -6,6 +6,7 @@ import com.restaurant.api.entity.User;
 import com.restaurant.api.entity.Notification;
 import com.restaurant.api.entity.NotificationUserStatus;
 import com.restaurant.api.enums.NotificationStatus;
+import com.restaurant.api.enums.NotificationType;
 import com.restaurant.api.repository.NotificationRepository;
 import com.restaurant.api.repository.NotificationUserStatusRepository;
 import com.restaurant.api.repository.UserRepository;
@@ -41,12 +42,27 @@ public class NotificationService {
     private final NotificationUserStatusRepository userStatusRepository;
     private final UserRepository userRepository; // bảng app_user
     private final UserService userService; // bảng app_user
+    private final SystemSettingService systemSettingService;
 
     // ============================================================
     // 1. TẠO THÔNG BÁO CHUNG + GÁN CHO NHIỀU USER
     // ============================================================
     @Transactional
     public void createNotification(CreateNotificationRequest req) {
+
+        // ----------------------------------------------------------------------
+        // Phase 4.3 – RULE ENGINE:
+        // - Nếu tắt toàn bộ notification → không tạo
+        // - Nếu tắt rule theo type → không tạo
+        // ----------------------------------------------------------------------
+        if (req != null) {
+            if (!isNotificationEnabled()) {
+                return; // NO-OP
+            }
+            if (!isRuleEnabledForType(req.getType())) {
+                return; // NO-OP
+            }
+        }
 
         // 1. Tạo bản ghi notification gốc
         Notification notification = Notification.builder()
@@ -212,4 +228,37 @@ public class NotificationService {
                 })
                 .toList();
     }
+
+    // ======================================================================
+// HELPER – KIỂM TRA RULE ENGINE (Phase 4.3)
+// ======================================================================
+
+    /**
+     * Check bật/tắt toàn bộ hệ thống thông báo.
+     * - Key: notification.enabled
+     * - Default: true
+     */
+    private boolean isNotificationEnabled() {
+        return systemSettingService.getBooleanSetting("notification.enabled", true);
+    }
+
+    /**
+     * Check bật/tắt rule theo từng loại thông báo.
+     * - Rule theo event (ORDER/PAYMENT)
+     * - Rule theo scheduled (LOW_STOCK/REVENUE_ZERO)
+     */
+    private boolean isRuleEnabledForType(NotificationType type) {
+        if (type == null) return true;
+
+        // Nếu tắt toàn bộ → chặn hết
+        if (!isNotificationEnabled()) return false;
+
+        return switch (type) {
+            case ORDER -> systemSettingService.getBooleanSetting("notification.rule.order_created", true);
+            case PAYMENT -> systemSettingService.getBooleanSetting("notification.rule.payment_created", true);
+            case STOCK -> systemSettingService.getBooleanSetting("notification.rule.low_stock.enabled", true);
+            default -> true; // INFO/khác: để true cho an toàn
+        };
+    }
+
 }

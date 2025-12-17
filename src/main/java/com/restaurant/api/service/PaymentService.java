@@ -56,6 +56,8 @@ public class PaymentService {
     private final InvoiceService invoiceService;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    // ✅ Phase 4.3 – Rule Engine thông báo
+    private final NotificationRuleService notificationRuleService;
     private final AuditLogService auditLogService;
     private final RestaurantTableService restaurantTableService;
     private final VoucherService voucherService;
@@ -302,15 +304,10 @@ public class PaymentService {
             }
         }
 
-        // =====================================================================
-        // GỬI THÔNG BÁO: Tạo thanh toán
-        // =====================================================================
-        CreateNotificationRequest re = new CreateNotificationRequest();
-        re.setTitle("Tạo thanh toán");
-        re.setType(NotificationType.PAYMENT);
-        re.setMessage("Tạo thanh toán");
-        re.setLink("");
-        notificationService.createNotification(re);
+        // ============================================================
+        // Phase 4.3 – Rule Engine: thanh toán thành công
+        // ============================================================
+        notificationRuleService.onPaymentSuccess(payment);
 
         // ✅ Audit log tạo payment
         auditLogService.log(

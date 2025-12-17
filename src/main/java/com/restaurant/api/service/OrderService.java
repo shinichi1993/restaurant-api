@@ -51,6 +51,8 @@ public class OrderService {
     private final StockEntryRepository stockEntryRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    // ✅ Phase 4.3 – Rule Engine thông báo (không gọi NotificationService trực tiếp nữa)
+    private final NotificationRuleService notificationRuleService;
     private final AuditLogService auditLogService;
     // ✅ Service quản lý bàn (Module 16)
     private final RestaurantTableService restaurantTableService;
@@ -270,23 +272,11 @@ public class OrderService {
         consumeStockForOrder(saved, orderItems);
 
         // ------------------------------------------------------------
-        // 8) GỬI THÔNG BÁO + AUDIT LOG
+        // 8) GỬI THÔNG BÁO QUA RULE ENGINE (Phase 4.3)
         // ------------------------------------------------------------
-        // Thông báo tạo order mới
-        CreateNotificationRequest re = new CreateNotificationRequest();
-        re.setTitle("Tạo order mới");
-        re.setType(NotificationType.ORDER);
-        re.setMessage("Tạo order mới");
-        re.setLink("");
-        notificationService.createNotification(re);
-
-        // Thông báo tiêu nguyên liệu
-        CreateNotificationRequest res = new CreateNotificationRequest();
-        res.setTitle("Tiêu nguyên liệu");
-        res.setType(NotificationType.ORDER);
-        res.setMessage("Tiêu nguyên liệu khi order");
-        res.setLink("");
-        notificationService.createNotification(res);
+        // - Không gọi notificationService.createNotification trực tiếp nữa.
+        // - Rule Engine sẽ tự kiểm tra bật/tắt + chống spam.
+        notificationRuleService.onOrderCreated(saved, orderItems);
 
         // Audit log tạo order
         auditLogService.log(
@@ -432,15 +422,10 @@ public class OrderService {
         order.setStatus(newStatus);
         orderRepository.save(order);
 
-        // =====================================================================
-        // GỬI THÔNG BÁO: Update order
-        // =====================================================================
-        CreateNotificationRequest re = new CreateNotificationRequest();
-        re.setTitle("Update order");
-        re.setType(NotificationType.ORDER);
-        re.setMessage("Chuyển trạng thái order thành " + newStatus);
-        re.setLink("");
-        notificationService.createNotification(re);
+        // ============================================================
+        // Phase 4.3 – Rule Engine: thông báo đổi trạng thái order
+        // ============================================================
+        notificationRuleService.onOrderStatusChanged(order, oldStatus, newStatus);
 
         // ✅ Audit log cập nhật order
         auditLogService.log(
@@ -1129,23 +1114,11 @@ public class OrderService {
         consumeStockForOrder(saved, orderItems);
 
         // ------------------------------------------------------------
-        // 8) GỬI THÔNG BÁO + AUDIT LOG (GIỐNG createOrder)
+        // 8) GỬI THÔNG BÁO QUA RULE ENGINE (Phase 4.3)
         // ------------------------------------------------------------
-        // Thông báo tạo order mới
-        CreateNotificationRequest re = new CreateNotificationRequest();
-        re.setTitle("Tạo order mới (Simple POS)");
-        re.setType(NotificationType.ORDER);
-        re.setMessage("Tạo order mới từ chế độ POS đơn giản");
-        re.setLink("");
-        notificationService.createNotification(re);
-
-        // Thông báo tiêu nguyên liệu
-        CreateNotificationRequest res = new CreateNotificationRequest();
-        res.setTitle("Tiêu nguyên liệu (Simple POS)");
-        res.setType(NotificationType.ORDER);
-        res.setMessage("Tiêu nguyên liệu khi tạo order Simple POS");
-        res.setLink("");
-        notificationService.createNotification(res);
+        // - Không gọi notificationService.createNotification trực tiếp nữa.
+        // - Rule Engine sẽ tự kiểm tra bật/tắt + chống spam.
+        notificationRuleService.onOrderCreated(saved, orderItems);
 
         // Audit log tạo order
         auditLogService.log(

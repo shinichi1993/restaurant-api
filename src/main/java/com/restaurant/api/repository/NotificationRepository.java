@@ -37,4 +37,10 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
             LocalDateTime from,
             LocalDateTime to
     );
+
+    /**
+     * Kiểm tra đã tồn tại thông báo có title trong khoảng thời gian gần đây chưa.
+     * Dùng để chống spam (dedup).
+     */
+    boolean existsByTitleAndCreatedAtAfter(String title, java.time.LocalDateTime createdAt);
 }
