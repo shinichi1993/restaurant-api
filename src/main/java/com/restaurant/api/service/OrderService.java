@@ -1,18 +1,20 @@
 package com.restaurant.api.service;
 
-import com.restaurant.api.dto.notification.CreateNotificationRequest;
+import com.restaurant.api.dto.kitchen.KitchenItemRealtimeDto;
 import com.restaurant.api.dto.order.*;
 import com.restaurant.api.entity.*;
 import com.restaurant.api.enums.AuditAction;
-import com.restaurant.api.enums.NotificationType;
 import com.restaurant.api.enums.OrderItemStatus;
 import com.restaurant.api.enums.OrderStatus;
+import com.restaurant.api.event.OrderCreatedEvent;
 import com.restaurant.api.repository.*;
-import com.restaurant.api.util.AuthUtil;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.restaurant.api.enums.PosTableChangeReason;
+import com.restaurant.api.event.TableChangedEvent;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -58,6 +60,11 @@ public class OrderService {
     private final RestaurantTableService restaurantTableService;
     // ✅ Service đọc cấu hình hệ thống (Module 20)
     private final SystemSettingService systemSettingService;
+
+    private final ApplicationEventPublisher eventPublisher;
+    private final ApplicationEventPublisher applicationEventPublisher;
+
+
 
     // -------------------------------------------------------
     // HÀM ĐỌC POS SETTINGS
@@ -227,6 +234,22 @@ public class OrderService {
             orderRepository.save(saved);
         }
 
+        // ============================================================
+        // PHASE 5.3.5 – REALTIME POS TABLE (ORDER CREATED)
+        // ------------------------------------------------------------
+        // Bắn realtime cho màn hình POS Table khi:
+        //  - Order được tạo
+        //  - Và có gán bàn
+        // ============================================================
+        if (tableId != null) {
+            applicationEventPublisher.publishEvent(
+                    new TableChangedEvent(
+                            tableId,
+                            PosTableChangeReason.ORDER_CREATED
+                    )
+            );
+        }
+
         // ------------------------------------------------------------
         // 6) TẠO DANH SÁCH ORDER ITEM THEO ENTITY MỚI
         // ------------------------------------------------------------
@@ -267,6 +290,15 @@ public class OrderService {
         orderItemRepository.saveAll(orderItems);
 
         // ------------------------------------------------------------
+        // 6.1) PHÁT EVENT DOMAIN – SAU KHI TẠO ORDER
+        // ------------------------------------------------------------
+        if (autoSendKitchen) {
+            eventPublisher.publishEvent(
+                    new OrderCreatedEvent(saved, orderItems, autoSendKitchen)
+            );
+        }
+
+        // ------------------------------------------------------------
         // 7) TRỪ KHO THEO RECIPE (giữ nguyên logic cũ)
         // ------------------------------------------------------------
         consumeStockForOrder(saved, orderItems);
@@ -290,8 +322,9 @@ public class OrderService {
         // ------------------------------------------------------------
         // 9) TRẢ VỀ DTO ORDER RESPONSE
         // ------------------------------------------------------------
+        OrderResponse orderResponse = toOrderResponse(saved, orderItems);
 
-        return toOrderResponse(saved, orderItems);
+        return orderResponse;
     }
 
     /**
@@ -1135,4 +1168,31 @@ public class OrderService {
         return toOrderResponse(saved, orderItems);
     }
 
+    /**
+     * Map OrderItem entity sang DTO realtime cho bếp.
+     * ------------------------------------------------------------
+     * Tách riêng để:
+     *  - Không serialize entity trực tiếp
+     *  - Tránh lỗi Hibernate Lazy Proxy
+     */
+    private KitchenItemRealtimeDto toKitchenRealtimeDto(OrderItem item) {
+
+        Order order = item.getOrder();
+        RestaurantTable table = order != null ? order.getTable() : null;
+        Dish dish = item.getDish();
+
+        return KitchenItemRealtimeDto.builder()
+                .orderItemId(item.getId())
+                .orderId(order != null ? order.getId() : null)
+                .orderCode(order != null ? order.getOrderCode() : null)
+                .tableId(table != null ? table.getId() : null)
+                .tableName(table != null ? table.getName() : null)
+                .dishId(dish != null ? dish.getId() : null)
+                .dishName(dish != null ? dish.getName() : null)
+                .quantity(item.getQuantity())
+                .status(item.getStatus())
+                .note(item.getNote())
+                .createdAt(item.getCreatedAt())
+                .build();
+    }
 }

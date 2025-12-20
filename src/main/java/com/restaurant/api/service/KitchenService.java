@@ -9,6 +9,7 @@ import com.restaurant.api.entity.OrderItem;
 import com.restaurant.api.entity.RestaurantTable;
 import com.restaurant.api.enums.OrderItemStatus;
 import com.restaurant.api.enums.OrderStatus;
+import com.restaurant.api.event.RealtimeEventPublisher;
 import com.restaurant.api.repository.OrderItemRepository;
 import com.restaurant.api.repository.OrderRepository;
 import jakarta.persistence.EntityNotFoundException;
@@ -41,6 +42,12 @@ public class KitchenService {
     private final OrderItemRepository orderItemRepository;
     private final OrderRepository orderRepository;
     private final SystemSettingService systemSettingService;
+    /**
+     * Publisher bắn realtime qua WebSocket (Phase 5.2.4)
+     * - Dùng topic: /topic/kitchen
+     * - Payload: KitchenItemResponse (DTO đã có sẵn)
+     */
+    private final RealtimeEventPublisher realtimeEventPublisher;
 
     // ------------------------------------------------------------
     // HÀM ĐỌC CẤU HÌNH POS CHO BẾP
@@ -241,8 +248,23 @@ public class KitchenService {
             }
         }
 
-        // 7) Trả về DTO
-        return toKitchenItemResponse(item);
+        // 7) Convert sang DTO để trả về FE
+        KitchenItemResponse resp = toKitchenItemResponse(item);
+
+        /**
+         * 8) BẮN REALTIME CHO BẾP (Phase 5.2.4)
+         * ------------------------------------------------------------
+         * Mục tiêu:
+         *  - Khi 1 món đổi trạng thái (SENT_TO_KITCHEN/COOKING/DONE/CANCELED)
+         *    thì các màn hình bếp đang mở sẽ nhận được update ngay lập tức.
+         *
+         * Payload dùng DTO KitchenItemResponse để:
+         *  - FE dùng luôn không phải map lại
+         *  - Đồng nhất với API /api/kitchen/items
+ */
+        realtimeEventPublisher.publishKitchen(resp);
+
+        return resp;
     }
 
     /**

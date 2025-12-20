@@ -145,6 +145,11 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- WebSocket + STOMP (Phase 5.1) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-websocket</artifactId>
+        </dependency>
 
     </dependencies>
 

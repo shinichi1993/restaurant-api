@@ -221,6 +221,10 @@ public class RestaurantTableService {
             throw new IllegalStateException("Bàn không ở trạng thái AVAILABLE, không thể mở order mới");
         }
         table.setStatus(TableStatus.OCCUPIED);
+
+        // 🔥 BẮT BUỘC SAVE + FLUSH để socket có
+        restaurantTableRepository.saveAndFlush(table);
+
         return table;
     }
 

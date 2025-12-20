@@ -40,6 +40,7 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
      * Dùng trong:
      *  - KitchenService.getKitchenItems()
      *  - Dashboard muốn xem số món đang COOKING
+     *  - Dùng cho màn hình bếp (SENT_TO_KITCHEN, COOKING)
      */
     List<OrderItem> findByStatusIn(List<OrderItemStatus> statuses);
 

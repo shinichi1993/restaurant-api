@@ -1,22 +1,24 @@
 package com.restaurant.api.service;
 
-import com.restaurant.api.dto.notification.CreateNotificationRequest;
 import com.restaurant.api.dto.payment.CalcPaymentRequest;
 import com.restaurant.api.dto.payment.CalcPaymentResponse;
 import com.restaurant.api.dto.payment.PaymentRequest;
 import com.restaurant.api.dto.payment.PaymentResponse;
 import com.restaurant.api.entity.*;
 import com.restaurant.api.enums.AuditAction;
-import com.restaurant.api.enums.NotificationType;
 import com.restaurant.api.enums.OrderStatus;
+import com.restaurant.api.event.RealtimeEventPublisher;
 import com.restaurant.api.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.restaurant.api.service.VoucherService;
 import com.restaurant.api.dto.voucher.VoucherApplyRequest;
 import com.restaurant.api.dto.voucher.VoucherApplyResponse;
+
+import com.restaurant.api.enums.PosTableChangeReason;
+import com.restaurant.api.event.TableChangedEvent;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -63,6 +65,9 @@ public class PaymentService {
     private final VoucherService voucherService;
     private final SystemSettingService systemSettingService;
     private final MemberService memberService;
+
+    private final RealtimeEventPublisher realtimeEventPublisher;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     // =====================================================================
     // 1. TẠO PAYMENT CHO ORDER
@@ -300,7 +305,17 @@ public class PaymentService {
         // =====================================================================
         if (order.getStatus() == OrderStatus.PAID) {
             if (order.getTable() != null && order.getTable().getId() != null) {
-                restaurantTableService.markTableAvailable(order.getTable().getId());
+                Long tableId = order.getTable().getId();
+
+                restaurantTableService.markTableAvailable(tableId);
+
+                // 🔥 Publish event – KHÔNG bắn websocket trực tiếp
+                applicationEventPublisher.publishEvent(
+                        new TableChangedEvent(
+                                tableId,
+                                PosTableChangeReason.PAYMENT_DONE
+                        )
+                );
             }
         }
 

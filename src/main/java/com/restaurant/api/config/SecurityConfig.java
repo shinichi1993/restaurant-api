@@ -85,6 +85,9 @@ public class SecurityConfig {
                         // Cho phép OPTIONS cho tất cả request → rất quan trọng
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
+                        // Cho phép handshake WebSocket (SockJS)
+                        .requestMatchers("/ws/**").permitAll()
+
                         // Cho phép auth API
                         .requestMatchers(
                                 "/api/auth/**",
