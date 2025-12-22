@@ -39,4 +39,8 @@ public class PaymentResponse {
     private Integer loyaltyEarnedPoint; // Điểm nhận được từ hóa đơn
     private BigDecimal customerPaid;
     private BigDecimal changeAmount;
+    /**
+     * Trạng thái thanh toán (SUCCESS/PENDING/...)
+     */
+    private String status;
 }

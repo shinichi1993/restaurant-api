@@ -346,18 +346,58 @@ public class OrderService {
      *  - from, to: nếu null thì không filter theo ngày
      */
     @Transactional(readOnly = true)
-    public List<OrderResponse> getOrders(OrderStatus status, LocalDateTime from, LocalDateTime to) {
+    public List<OrderResponse> getOrders(OrderStatus status, LocalDateTime from, LocalDateTime to, Boolean paid) {
         List<Order> orders;
 
-        if (status != null && from != null && to != null) {
-            orders = orderRepository.findByStatusAndCreatedAtBetween(status, from, to);
-        } else if (status != null) {
-            orders = orderRepository.findByStatus(status);
-        } else if (from != null && to != null) {
-            orders = orderRepository.findByCreatedAtBetween(from, to);
+        // ======================================================
+        // EPIC 3 – Ưu tiên filter theo paid (nếu có)
+        // ======================================================
+        if (paid != null) {
+            if (paid) {
+                // -----------------------------
+                // ĐÃ THANH TOÁN → chỉ lấy PAID
+                // -----------------------------
+                if (from != null && to != null) {
+                    orders = orderRepository.findByStatusAndCreatedAtBetween(OrderStatus.PAID, from, to);
+                } else {
+                    orders = orderRepository.findByStatus(OrderStatus.PAID);
+                }
+            } else {
+                // -------------------------------------------------------
+                // CHƯA THANH TOÁN → chỉ lấy NEW + SERVING
+                // (Loại PAID và CANCELED khỏi list mặc định của Admin)
+                // -------------------------------------------------------
+                List<OrderStatus> unpaidStatuses = List.of(OrderStatus.NEW, OrderStatus.SERVING);
+
+                if (from != null && to != null) {
+                    orders = orderRepository.findByStatusInAndCreatedAtBetween(unpaidStatuses, from, to);
+                } else {
+                    orders = orderRepository.findByStatusIn(unpaidStatuses);
+                }
+            }
         } else {
-            orders = orderRepository.findAll();
+            // ======================================================
+            // paid = null → giữ logic cũ (lọc theo status/from/to)
+            // ======================================================
+            if (status != null && from != null && to != null) {
+                orders = orderRepository.findByStatusAndCreatedAtBetween(status, from, to);
+            } else if (status != null) {
+                orders = orderRepository.findByStatus(status);
+            } else if (from != null && to != null) {
+                orders = orderRepository.findByCreatedAtBetween(from, to);
+            } else {
+                orders = orderRepository.findAll();
+            }
         }
+
+        // ======================================================
+        // EPIC 3 – Sort mặc định: mới nhất lên đầu (createdAt DESC)
+        // ------------------------------------------------------
+        // Vì repository methods hiện tại không truyền Sort, ta sort
+        // tại service để đảm bảo UI luôn ưu tiên order mới.
+        // ======================================================
+        orders.sort((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()));
+
 
         if (orders.isEmpty()) {
             return Collections.emptyList();
@@ -673,6 +713,8 @@ public class OrderService {
 
             itemResponses.add(itemRes);
         }
+        // ❗ Lấy thông tin bàn (có thể null – POS nhanh / takeaway)
+        RestaurantTable table = order.getTable();
 
         // ❗ Cập nhật lại totalPrice — luôn đúng, không cần FE tính lại
         return OrderResponse.builder()
@@ -682,6 +724,13 @@ public class OrderService {
                 .totalPrice(total)
                 .status(order.getStatus())
                 .note(order.getNote())
+
+                // =========================
+                // THÔNG TIN BÀN (ADD)
+                // =========================
+                .tableId(table != null ? table.getId() : null)
+                .tableName(table != null ? table.getName() : null)
+
                 .createdBy(order.getCreatedBy())
                 .createdAt(order.getCreatedAt())
                 .updatedAt(order.getUpdatedAt())

@@ -1,10 +1,12 @@
 package com.restaurant.api.export.invoice;
 
 import com.lowagie.text.*;
+import com.lowagie.text.Image;
 import com.lowagie.text.Rectangle;
 import com.lowagie.text.pdf.*;
 import com.restaurant.api.dto.invoice.InvoiceExportData;
 import org.springframework.stereotype.Component;
+import com.restaurant.api.util.QrCodeUtil;
 
 import java.awt.*;
 import java.io.ByteArrayOutputStream;
@@ -90,6 +92,24 @@ public class InvoicePdfExporterThermal {
                     BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 8, Font.BOLD);
             Font fontBigTotal = FontFactory.getFont(fontPath,
                     BaseFont.IDENTITY_H, BaseFont.EMBEDDED, 9, Font.BOLD);
+
+            // ========================================================
+            // QR CODE – DÙNG ORDER ID (InvoiceExportData hiện chưa có orderCode)
+            // ========================================================
+            if (data.getOrderId() != null) {
+
+                String qrText = "ORDER:" + data.getOrderId();
+
+                Image qr = com.restaurant.api.util.QrCodeUtil.generateQrImage(qrText, 80);
+                qr.setAlignment(Image.ALIGN_CENTER);
+                qr.setSpacingAfter(4);
+                doc.add(qr);
+
+                Paragraph pOrder = new Paragraph("Order: " + data.getOrderId(), fontNormal);
+                pOrder.setAlignment(Element.ALIGN_CENTER);
+                pOrder.setSpacingAfter(4);
+                doc.add(pOrder);
+            }
 
             // ========================================================
             // 1. HEADER CỬA HÀNG (KHÔNG IN MST)

@@ -7,6 +7,8 @@ import com.restaurant.api.dto.payment.PaymentResponse;
 import com.restaurant.api.entity.*;
 import com.restaurant.api.enums.AuditAction;
 import com.restaurant.api.enums.OrderStatus;
+import com.restaurant.api.enums.PaymentStatus;
+import com.restaurant.api.enums.PaymentMethod;
 import com.restaurant.api.event.RealtimeEventPublisher;
 import com.restaurant.api.repository.*;
 import lombok.RequiredArgsConstructor;
@@ -251,6 +253,20 @@ public class PaymentService {
                 .createdBy(user.getId())
                 .build();
 
+        // ------------------------------------------------------------
+        // [ONLINE PAYMENT – OPTION A] Chuẩn bị kiến trúc
+        // - OFFLINE (CASH/BANK_MANUAL): tạo payment là SUCCESS ngay
+        // - ONLINE (MOMO/VNPAY/CREDIT): CHƯA cho tạo thật (FE disable)
+        //   => nhưng để an toàn, nếu lỡ nhận vào thì chặn tại BE
+        // ------------------------------------------------------------
+        if (req.getMethod() == PaymentMethod.MOMO
+                || req.getMethod() == PaymentMethod.VNPAY
+                || req.getMethod() == PaymentMethod.CREDIT) {
+            throw new RuntimeException("Phương thức thanh toán online chưa được hỗ trợ ở phiên bản hiện tại.");
+        }
+        // OFFLINE => SUCCESS
+        payment.setStatus(PaymentStatus.SUCCESS);
+
         paymentRepository.save(payment);
 
         // ======================================================
@@ -347,7 +363,7 @@ public class PaymentService {
     public PaymentResponse getPayment(Long id) {
         Payment payment = paymentRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy payment"));
-        return toResponse(payment, null);
+        return  toResponse(payment, null);
     }
 
     // =====================================================================
@@ -394,6 +410,7 @@ public class PaymentService {
                 .method(p.getMethod())
                 .note(p.getNote())
                 .paidAt(p.getPaidAt())
+                .status(p.getStatus() != null ? p.getStatus().name() : "SUCCESS")
                 .loyaltyEarnedPoint(loyaltyEarnedPoint)  // gắn giá trị loyaltyEarnedPoint đã tính
                 .createdBy(p.getCreatedBy())
                 .createdAt(p.getCreatedAt())

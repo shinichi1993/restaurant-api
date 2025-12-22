@@ -1,6 +1,7 @@
 package com.restaurant.api.entity;
 
 import com.restaurant.api.enums.PaymentMethod;
+import com.restaurant.api.enums.PaymentStatus;
 import jakarta.persistence.*;
 import lombok.*;
 import java.math.BigDecimal;
@@ -81,6 +82,14 @@ public class Payment {
     // Ghi chú thêm
     @Column(columnDefinition = "TEXT")
     private String note;
+
+    /**
+     * Trạng thái thanh toán:
+     *  - OFFLINE: SUCCESS
+     *  - ONLINE: PENDING/SUCCESS/FAILED/CANCELED (chuẩn bị cho tương lai)
+     */
+    @Enumerated(EnumType.STRING)
+    private PaymentStatus status;
 
     // Thời gian thanh toán
     @Column(name = "paid_at", nullable = false)

@@ -87,9 +87,17 @@ public class OrderController {
             LocalDateTime from,
             @RequestParam(required = false)
             @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss")
-            LocalDateTime to
+            LocalDateTime to,
+            // ============================================================
+            // EPIC 3 – Filter theo trạng thái thanh toán
+            // ------------------------------------------------------------
+            // paid = false → chỉ lấy order CHƯA thanh toán (NEW, SERVING)
+            // paid = true  → chỉ lấy order ĐÃ thanh toán (PAID)
+            // paid = null  → giữ logic cũ (lọc theo status/from/to nếu có)
+            // ============================================================
+            @RequestParam(required = false) Boolean paid
     ) {
-        List<OrderResponse> list = orderService.getOrders(status, from, to);
+        List<OrderResponse> list = orderService.getOrders(status, from, to, paid);
         return ResponseEntity.ok(list);
     }
 

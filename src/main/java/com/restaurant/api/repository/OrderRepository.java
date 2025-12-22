@@ -51,6 +51,16 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     Optional<Order> findFirstByTableIdAndStatusIn(Long tableId, List<OrderStatus> statuses);
 
     /**
+     * EPIC 3 – Lấy danh sách order theo nhiều trạng thái (NEW + SERVING)
+     */
+    List<Order> findByStatusIn(List<OrderStatus> statuses);
+
+    /**
+     * EPIC 3 – Lấy danh sách order theo nhiều trạng thái + lọc theo thời gian tạo
+     */
+    List<Order> findByStatusInAndCreatedAtBetween(List<OrderStatus> statuses, LocalDateTime from, LocalDateTime to);
+
+    /**
      * Tìm order đang mở theo bàn.
      * ---------------------------------------------------------
      * - tableId: id của bàn

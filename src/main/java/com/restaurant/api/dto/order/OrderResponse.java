@@ -42,4 +42,8 @@ public class OrderResponse {
     private LocalDateTime updatedAt; // Ngày cập nhật
 
     private List<OrderItemResponse> items; // Danh sách món
+
+    // Thông tin bàn (dùng cho POS / Admin)
+    private Long tableId;
+    private String tableName;
 }

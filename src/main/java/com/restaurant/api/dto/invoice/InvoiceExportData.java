@@ -47,6 +47,7 @@ public class InvoiceExportData {
     // ============================================================
     private Long invoiceId;
     private Long orderId;
+    private String orderCode;
     private LocalDateTime paidAt;
     private String paymentMethod;
 
