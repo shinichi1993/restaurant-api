@@ -32,3 +32,23 @@ jwt:
   secret: restaurant-dev-secret-key-1234567890123456sdadsaqweqweqweqweqwewadsdsfdqwefdggdfsdasdsadwqeqweqwewqeadsasdsadasdasdqweqweqweqwewa
   access-token-expiration-minutes: 60
   refresh-token-expiration-days: 7
+
+momo:
+
+  mode: product
+
+  sandbox:
+    endpoint: https://test-payment.momo.vn/v2/gateway/api/create
+    partner-code: MOMOTIZB20251112_TEST
+    access-key: DOJCAtMxDvslOzlP
+    secret-key: TAOGAxV1BEQ5vjUCkrV32IeOMiaBZidX
+    redirect-url: http://localhost:5173/payment/momo-return
+    ipn-url: http://localhost:8080/api/payments/momo/ipn
+
+  product:
+    endpoint: https://payment.momo.vn/v2/gateway/api/create
+    partner-code: MOMOTIZB20251112
+    access-key: KknmM1RjCrxpDqOj
+    secret-key: NdqdNXAJTpwbAQDsQw8hZaZv8SuWu0i2
+    redirect-url: http://localhost:5173/payment/momo-return
+    ipn-url: http://localhost:8080/api/payments/momo/ipn

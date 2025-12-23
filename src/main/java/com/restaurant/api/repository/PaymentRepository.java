@@ -42,4 +42,10 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
      * Dùng cho filter trong màn danh sách thanh toán.
      */
     List<Payment> findByPaidAtBetween(LocalDateTime from, LocalDateTime to);
+
+    /**
+     * Tìm payment theo momoOrderId (dùng cho IPN MoMo).
+     * Bắt buộc cho online payment (idempotent).
+     */
+    Optional<Payment> findByMomoOrderId(String momoOrderId);
 }
