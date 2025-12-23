@@ -14,7 +14,7 @@ import com.restaurant.api.util.AuthUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -43,6 +43,7 @@ public class NotificationService {
     private final UserRepository userRepository; // bảng app_user
     private final UserService userService; // bảng app_user
     private final SystemSettingService systemSettingService;
+    private final SimpMessagingTemplate messagingTemplate;
 
     // ============================================================
     // 1. TẠO THÔNG BÁO CHUNG + GÁN CHO NHIỀU USER
@@ -99,6 +100,31 @@ public class NotificationService {
         }
 
         userStatusRepository.saveAll(list);
+
+        // ============================================================
+        // PHASE 5 – REALTIME NOTIFICATION
+        // ------------------------------------------------------------
+        // Sau khi tạo notification + gán cho user,
+        // tiến hành PUSH realtime qua WebSocket để FE hiển thị ngay,
+        // KHÔNG cần polling.
+        // ============================================================
+
+        // Build payload đơn giản gửi xuống FE
+        NotificationResponse payload = NotificationResponse.builder()
+                .id(notification.getId())
+                .title(notification.getTitle())
+                .message(notification.getMessage())
+                .type(notification.getType())
+                .link(notification.getLink())
+                .createdAt(notification.getCreatedAt())
+                .status(NotificationStatus.UNREAD)
+                .build();
+
+        // Broadcast cho toàn bộ client đang subscribe notification
+        messagingTemplate.convertAndSend(
+                "/topic/notification",
+                payload
+        );
     }
 
     // ============================================================
