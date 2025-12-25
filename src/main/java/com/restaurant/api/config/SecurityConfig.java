@@ -117,6 +117,7 @@ public class SecurityConfig {
         // FE đang chạy ở http://localhost:5173
         config.setAllowedOrigins(List.of(
                 "https://restaurant-fe-production.up.railway.app",
+                "http://192.168.100.62:5173",
                 "http://localhost:5173"));
 
         // Các method FE sẽ dùng
