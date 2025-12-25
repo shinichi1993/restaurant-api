@@ -33,4 +33,18 @@ public class SystemSettingResponse {
 
     // Mô tả hiển thị trên màn hình cấu hình
     private String description;
+
+    // =========================
+    // Metadata cho FE render động
+    // =========================
+    private String label;          // tên hiển thị
+    private String inputType;      // INPUT/NUMBER/SWITCH/...
+    private Integer orderIndex;    // thứ tự
+    private java.math.BigDecimal minValue;
+    private java.math.BigDecimal maxValue;
+    private Boolean visible;       // ẩn/hiện
+    private Boolean editable;      // disable input
+    private String dependsOnKey;   // dependency key
+    private String dependsOnValue; // dependency value
+    private String settingGroupLabel;   // label hiển thị FE của settingGroup: Cấu hình POS,...
 }

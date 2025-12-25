@@ -29,14 +29,40 @@ public class SystemSettingService {
     private final SystemSettingRepository systemSettingRepository;
 
     /**
-     * Lấy toàn bộ cấu hình hệ thống.
-     * Dùng cho màn hình Settings nâng cao, load lần đầu.
+     * Lấy toàn bộ system setting để FE render động.
+     *
+     * Quy tắc xử lý:
+     * ----------------------------------------------------
+     * 1. Chỉ hiển thị setting có visible = true hoặc null
+     *    (null = dữ liệu cũ, coi như hiển thị)
+     *
+     * 2. Sắp xếp thứ tự hiển thị:
+     *    - Ưu tiên theo settingGroup (chia tab ổn định)
+     *    - Sau đó theo orderIndex (thứ tự trong tab)
+     *    - Cuối cùng fallback theo settingKey
+     *      để đảm bảo kết quả luôn ổn định (deterministic)
      */
     @Transactional(readOnly = true)
     public List<SystemSettingResponse> getAllSettings() {
-        List<SystemSetting> settings = systemSettingRepository.findAll();
-
-        return settings.stream()
+        return systemSettingRepository.findAll().stream()
+                // 1️⃣ Ẩn các setting bị đánh dấu visible = false
+                .filter(s -> Boolean.TRUE.equals(s.getVisible()))
+                // 2️⃣ Sắp xếp để FE hiển thị ổn định
+                .sorted((a, b) -> {
+                    // 2.1. So sánh theo group (POS, LOYALTY, ...)
+                    int ga = a.getSettingGroup() == null ? 0 : a.getSettingGroup().compareToIgnoreCase(b.getSettingGroup());
+                    if (ga != 0) return ga;
+                    // 2.2. So sánh theo orderIndex trong cùng group
+                    Integer oa = a.getOrderIndex() == null ? 0 : a.getOrderIndex();
+                    Integer ob = b.getOrderIndex() == null ? 0 : b.getOrderIndex();
+                    int od = oa.compareTo(ob);
+                    if (od != 0) return od;
+                    // 2.3. Fallback theo key để tránh thứ tự không ổn định
+                    String ka = a.getSettingKey() == null ? "" : a.getSettingKey();
+                    String kb = b.getSettingKey() == null ? "" : b.getSettingKey();
+                    return ka.compareToIgnoreCase(kb);
+                })
+                // 3️⃣ Convert Entity → DTO cho FE
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
@@ -94,10 +120,24 @@ public class SystemSettingService {
         return SystemSettingResponse.builder()
                 .id(setting.getId())
                 .settingGroup(setting.getSettingGroup())
+                .settingGroupLabel(
+                        setting.getSettingGroupLabel() != null
+                                ? setting.getSettingGroupLabel()
+                                : setting.getSettingGroup()   // fallback
+                )
                 .settingKey(setting.getSettingKey())
                 .settingValue(setting.getSettingValue())
                 .valueType(setting.getValueType())
                 .description(setting.getDescription())
+                .label(setting.getLabel())
+                .inputType(setting.getInputType())
+                .orderIndex(setting.getOrderIndex())
+                .minValue(setting.getMinValue())
+                .maxValue(setting.getMaxValue())
+                .visible(setting.getVisible())
+                .editable(setting.getEditable())
+                .dependsOnKey(setting.getDependsOnKey())
+                .dependsOnValue(setting.getDependsOnValue())
                 .build();
     }
 

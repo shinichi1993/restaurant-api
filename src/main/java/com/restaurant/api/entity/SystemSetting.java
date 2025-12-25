@@ -6,6 +6,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.LocalDateTime;
+import java.math.BigDecimal;
 
 /**
  * Entity SystemSetting
@@ -27,10 +28,16 @@ public class SystemSetting {
 
     /**
      * Nhóm cấu hình (RESTAURANT, POS, LOYALTY, REPORT, INVOICE...)
-     * Dùng để hiển thị dạng tab / group trên FE.
      */
     @Column(name = "setting_group", nullable = false, length = 100)
     private String settingGroup;
+
+    /**
+     * Nhóm cấu hình (RESTAURANT, POS, LOYALTY, REPORT, INVOICE...)
+     * Dùng để hiển thị dạng tab / group trên FE.
+     */
+    @Column(name = "setting_group_label ", nullable = false, length = 100)
+    private String settingGroupLabel;
 
     /**
      * Khóa cấu hình duy nhất, ví dụ:
@@ -93,4 +100,59 @@ public class SystemSetting {
      */
     @Column(name = "updated_by")
     private Long updatedBy;
+
+    /**
+     * Tên hiển thị trên FE (label).
+     * - Dùng để FE render động, không hard-code label nữa.
+     */
+    @Column(name = "label", length = 255)
+    private String label;
+
+    /**
+     * Kiểu input FE sẽ render:
+     * - INPUT, NUMBER, SWITCH, SELECT (mở rộng sau)
+     */
+    @Column(name = "input_type", length = 30)
+    private String inputType;
+
+    /**
+     * Thứ tự hiển thị trong group/tab.
+     */
+    @Column(name = "order_index")
+    private Integer orderIndex;
+
+    /**
+     * Min/Max cho input kiểu NUMBER (nếu cần).
+     */
+    @Column(name = "min_value", precision = 19, scale = 4)
+    private BigDecimal minValue;
+
+    @Column(name = "max_value", precision = 19, scale = 4)
+    private BigDecimal maxValue;
+
+    /**
+     * Ẩn/hiện setting trên FE.
+     */
+    @Column(name = "visible")
+    private Boolean visible;
+
+    /**
+     * Cho phép chỉnh sửa trên FE (disable input nếu false).
+     */
+    @Column(name = "editable")
+    private Boolean editable;
+
+    /**
+     * Dependency hiển thị:
+     * - Nếu dependsOnKey != null thì setting chỉ hiển thị khi
+     *   giá trị của dependsOnKey == dependsOnValue
+     *
+     * Ví dụ:
+     * - pos.simple_pos_require_table phụ thuộc pos.simple_pos_mode = true
+     */
+    @Column(name = "depends_on_key", length = 150)
+    private String dependsOnKey;
+
+    @Column(name = "depends_on_value", length = 50)
+    private String dependsOnValue;
 }
